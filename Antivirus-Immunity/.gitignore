@@ -1,0 +1,20 @@
+# Rust Build Artifacts
+/target
+**/*.rs.bk
+
+# Compiled Executables
+*.exe
+*.pdb
+*.dll
+
+# Data Stores (Local DBs should not be committed)
+immunity_db.json
+
+# IDE/Editor
+.vscode
+.idea
+*.swp
+
+# OS
+Thumbs.db
+Desktop.ini
