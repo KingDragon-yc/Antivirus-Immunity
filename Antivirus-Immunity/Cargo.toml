@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "antivirus-immunity-core",
+    "antivirus-immunity-ebpf",
+    "antivirus-immunity-common",
+]
+resolver = "2"
