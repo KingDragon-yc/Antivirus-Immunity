@@ -1,4 +1,4 @@
-# Antivirus-Immunity# Antivirus-Immunity# Antivirus-Immunity# Antivirus-Immuni
+# Antivirus-Immunity# Antivirus-Immunity# Antivirus-Immunity# Antivirus-Immunity# Antivirus-Immuni
 
 
 
@@ -6,217 +6,437 @@
 
 
 
-[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)> **"A kind of Antivirus inspired by immune system, augmented with local AI — now with eBPF kernel-level vision."**本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件，并集成**本地 AI 模型**作为免疫决策中枢。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
+[![CI](https://github.com/KingDragon-yc/Antivirus-Immunity/actions/workflows/ci.yml/badge.svg)](https://github.com/KingDragon-yc/Antivirus-Immunity/actions/workflows/ci.yml)> **"A kind of Antivirus inspired by immune system, augmented with local AI — now with eBPF kernel-level vision."**
+
+[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
 
 [![eBPF](https://img.shields.io/badge/eBPF-CO--RE-blue.svg)](https://ebpf.io/)
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)> **"A kind of Antivirus inspired by immune system, augmented with local AI — now with eBPF kernel-level vision."**本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件，并集成**本地 AI 模型**作为免疫决策中枢。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
 
+---
 
----[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)> **"A kind of Antivirus inspired by immune system, augmented with local AI."**
+[![eBPF](https://img.shields.io/badge/eBPF-CO--RE-blue.svg)](https://ebpf.io/)
 
+## 📖 项目愿景
 
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## 📖 项目愿景[![eBPF](https://img.shields.io/badge/eBPF-CO--RE-blue.svg)](https://ebpf.io/)
-
-
-
-Antivirus-Immunity 是基于**人工免疫系统 (AIS)** 理论的安全防护引擎，结合本地 AI 大模型进行深度研判。与传统依赖特征库的杀毒软件不同，本项目侧重于：[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)- **自我识别 (Self/Non-Self Discrimination)**: 通过建立系统"正常态"的基线，识别入侵者。
+Antivirus-Immunity 是基于 **人工免疫系统 (AIS)** 理论的安全防护引擎，结合本地 AI 大模型进行深度研判。与传统依赖特征库的杀毒软件不同，本项目侧重于：
 
 
 
 - **自我/非我识别** — 建立系统"正常态"基线，识别偏离行为
 
-- **危险信号理论** — 监测系统压力信号（CPU 飙升、进程洪水等），动态调整免疫灵敏度
+- **危险信号理论** — 监测系统压力信号（CPU 飙升、进程洪水等），动态调整免疫灵敏度---[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)> **"A kind of Antivirus inspired by immune system, augmented with local AI."**
 
-- **AI 深度分析 (Cortex)** — 对模糊案例调用本地 LLM 进行自然语言推理---## 📖 项目愿景 (Vision)
+- **AI 深度分析 (Cortex)** — 对模糊案例调用本地 LLM 进行自然语言推理
 
 - **自适应性** — 对未知攻击手段做出反应，而非依赖已知签名
 
 
 
-### v0.4.0: All-in Linux + eBPF
-
-## 📖 项目愿景> **"A kind of Antivirus inspired by immune system, augmented with local AI."**- **行为免疫 (Behavioral Immunity)**: 基于行为模式而非静态特征来检测威胁。
-
-本版本的战略方向：**放弃 Windows 主战场，全面转向 Linux 云服务器 + eBPF 内核级监控。**
+### v0.4.0: All-in Linux + eBPF## 📖 项目愿景[![eBPF](https://img.shields.io/badge/eBPF-CO--RE-blue.svg)](https://ebpf.io/)
 
 
 
-目标场景：
+本版本的战略方向：**全面转向 Linux 云服务器 + eBPF 内核级监控。**
 
-- ☁️ 云 ECS / VPS（阿里云、AWS、腾讯云）Antivirus-Immunity 是基于**人工免疫系统 (AIS)** 理论的安全防护引擎，结合本地 AI 大模型进行深度研判。与传统依赖特征库的杀毒软件不同，本项目侧重于：本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件，并集成**本地 AI 模型**作为免疫决策中枢。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
+
+
+目标场景：Antivirus-Immunity 是基于**人工免疫系统 (AIS)** 理论的安全防护引擎，结合本地 AI 大模型进行深度研判。与传统依赖特征库的杀毒软件不同，本项目侧重于：[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)- **自我识别 (Self/Non-Self Discrimination)**: 通过建立系统"正常态"的基线，识别入侵者。
+
+
+
+- ☁️ 云 ECS / VPS（阿里云、AWS、腾讯云）
 
 - 🐳 Docker / Kubernetes 容器
 
-- 🤖 AI Agent 运行沙盒（LangChain, AutoGPT 等自动化 Agent 的边界护栏）
+- 🤖 AI Agent 运行沙盒（LangChain, AutoGPT 等自动化 Agent 的边界护栏）- **自我/非我识别** — 建立系统"正常态"基线，识别偏离行为
 
 - 💡 轻量实例适配（1C1G / 2C2G 自动切换 Lite 模式）
 
-- **自我/非我识别** — 建立系统"正常态"基线，识别偏离行为- **危险信号理论 (Danger Theory)**: 通过监测系统压力信号（CPU 飙升、进程洪水等）动态调整免疫灵敏度。
+- **危险信号理论** — 监测系统压力信号（CPU 飙升、进程洪水等），动态调整免疫灵敏度
 
 ---
 
-- **危险信号理论** — 监测系统压力信号（CPU 飙升、进程洪水等），动态调整免疫灵敏度
+- **AI 深度分析 (Cortex)** — 对模糊案例调用本地 LLM 进行自然语言推理---## 📖 项目愿景 (Vision)
 
 ## 🏗 架构设计
+
+- **自适应性** — 对未知攻击手段做出反应，而非依赖已知签名
+
+```
+
+                    ┌─────────────────────────────────────┐
+
+                    │         Workspace (Cargo)           │
+
+                    ├─────────────────────────────────────┤### v0.4.0: All-in Linux + eBPF
+
+                    │                                     │
+
+  ┌─────────────────┴─────────┐   ┌──────────────────────┴──────────┐## 📖 项目愿景> **"A kind of Antivirus inspired by immune system, augmented with local AI."**- **行为免疫 (Behavioral Immunity)**: 基于行为模式而非静态特征来检测威胁。
+
+  │  antivirus-immunity-core  │   │  antivirus-immunity-ebpf        │
+
+  │  (Windows · Legacy v0.3)  │   │  (Linux · eBPF v0.4 · Active)  │本版本的战略方向：**放弃 Windows 主战场，全面转向 Linux 云服务器 + eBPF 内核级监控。**
+
+  │                           │   │                                 │
+
+  │  ToolHelp32 进程扫描      │   │  eBPF 内核探针 (CO-RE)          │
+
+  │  YARA 规则引擎            │   │  进程/网络/文件/提权 监控       │
+
+  │  Windows API              │   │  Docker/K8s 容器感知            │目标场景：
+
+  └─────────┬─────────────────┘   │  策略引擎 + AI Agent 沙盒       │
+
+            │                     └──────────────┬──────────────────┘- ☁️ 云 ECS / VPS（阿里云、AWS、腾讯云）Antivirus-Immunity 是基于**人工免疫系统 (AIS)** 理论的安全防护引擎，结合本地 AI 大模型进行深度研判。与传统依赖特征库的杀毒软件不同，本项目侧重于：本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件，并集成**本地 AI 模型**作为免疫决策中枢。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
+
+            │                                    │
+
+            └────────────┬───────────────────────┘- 🐳 Docker / Kubernetes 容器
+
+                         │
+
+            ┌────────────▼────────────────────┐- 🤖 AI Agent 运行沙盒（LangChain, AutoGPT 等自动化 Agent 的边界护栏）
+
+            │  antivirus-immunity-common      │
+
+            │  (跨平台共享层)                   │- 💡 轻量实例适配（1C1G / 2C2G 自动切换 Lite 模式）
+
+            │                                 │
+
+            │  SecurityEvent 统一事件格式      │- **自我/非我识别** — 建立系统"正常态"基线，识别偏离行为- **危险信号理论 (Danger Theory)**: 通过监测系统压力信号（CPU 飙升、进程洪水等）动态调整免疫灵敏度。
+
+            │  AI Cortex (Ollama LLM)         │
+
+            │  Logger (JSONL 结构化日志)       │---
+
+            │  HashCache (LRU SHA256)         │
+
+            └─────────────────────────────────┘- **危险信号理论** — 监测系统压力信号（CPU 飙升、进程洪水等），动态调整免疫灵敏度
+
+```
+
+## 🏗 架构设计
+
+### eBPF 引擎架构
 
 - **AI 深度分析 (Cortex)** — 对模糊案例调用本地 LLM 进行自然语言推理- **自我识别 (Self/Non-Self Discrimination)**: 通过建立系统"正常态"的基线，识别入侵者。
 
 ```
 
-                    ┌─────────────────────────────────────┐- **自适应性** — 对未知攻击手段做出反应，而非依赖已知签名
-
-                    │         Workspace (Cargo)           │
-
-                    ├─────────────────────────────────────┤- **行为免疫 (Behavioral Immunity)**: 基于行为模式而非静态特征来检测威胁。## 📖 项目愿景 (Vision)- **AI 深度分析 (AI Cortex)**: 对模糊案例使用本地 LLM 进行自然语言推理，弥补规则引擎的刚性不足。
-
-                    │                                     │
-
-  ┌─────────────────┴─────────┐   ┌──────────────────────┴──────────┐### v0.4.0: All-in Linux + eBPF
-
-  │  antivirus-immunity-core  │   │  antivirus-immunity-ebpf        │
-
-  │  (Windows · Legacy v0.3)  │   │  (Linux · eBPF v0.4 · Active)  │- **危险信号理论 (Danger Theory)**: 通过监测系统压力信号（CPU 飙升、进程洪水等）动态调整免疫灵敏度。
-
-  │                           │   │                                 │
-
-  │  ToolHelp32 进程扫描      │   │  eBPF 内核探针 (CO-RE)          │本版本的战略方向：**放弃 Windows 主战场，全面转向 Linux 云服务器 + eBPF 内核级监控。**
-
-  │  YARA 规则引擎            │   │  进程/网络/文件/提权 监控       │
-
-  │  Windows API              │   │  Docker/K8s 容器感知            │- **AI 深度分析 (AI Cortex)**: 对模糊案例使用本地 LLM 进行自然语言推理，弥补规则引擎的刚性不足。- **自适应性 (Adaptability)**: 能够对未知的攻击手段做出反应。s-Immunity
-
-  └─────────┬─────────────────┘   │  策略引擎 + AI Agent 沙盒       │
-
-            │                     └──────────────┬──────────────────┘目标场景：
-
-            │                                    │
-
-            └────────────┬───────────────────────┘- ☁️ 云 ECS / VPS（阿里云、AWS、腾讯云）- **自适应性 (Adaptability)**: 能够对未知的攻击手段做出反应。
-
-                         │
-
-            ┌────────────▼────────────────────┐- 🐳 Docker / Kubernetes 容器
-
-            │  antivirus-immunity-common      │
-
-            │  (跨平台共享层)                   │- 🤖 AI Agent 运行沙盒（LangChain, AutoGPT 等自动化 Agent 的边界护栏）本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件，并集成**本地 AI 模型**作为免疫决策中枢。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
-
-            │                                 │
-
-            │  SecurityEvent 统一事件格式      │- 💡 轻量实例适配（1C1G / 2C2G 自动切换 Lite 模式）
-
-            │  AI Cortex (Ollama LLM)         │
-
-            │  Logger (JSONL 结构化日志)       │## 🏗 架构设计 (Architecture)
-
-            │  HashCache (LRU SHA256)         │
-
-            └─────────────────────────────────┘---
-
-```
-
-> **"A kind of Antivirus inspired by immune system, augmented with local AI."**
-
-### eBPF 引擎架构
-
-## 🏗 架构设计
-
-```
-
-┌──────────────────────────────────────────────────┐系统由四个核心层组成，模拟生物免疫回路：
+┌──────────────────────────────────────────────────┐```
 
 │  Kernel Space (eBPF probes, C/CO-RE)             │
 
-│  ┌───────────┐ ┌────────────┐ ┌───────────────┐ │```
+│  ┌───────────┐ ┌────────────┐ ┌───────────────┐ │                    ┌─────────────────────────────────────┐- **自适应性** — 对未知攻击手段做出反应，而非依赖已知签名
 
 │  │ execve    │ │ tcp_connect│ │ LSM file_open │ │
 
-│  │ tracepoint│ │ kprobe     │ │ bpf hook      │ │                    ┌─────────────────────────────────────┐- **自我识别 (Self/Non-Self Discrimination)**: 通过建立系统"正常态"的基线，识别入侵者。
+│  │ tracepoint│ │ kprobe     │ │ bpf hook      │ │                    │         Workspace (Cargo)           │
 
 │  └─────┬─────┘ └──────┬─────┘ └───────┬───────┘ │
 
-│        └───────────────┼───────────────┘         │                    │         Workspace (Cargo)           │
+│        └───────────────┼───────────────┘         │                    ├─────────────────────────────────────┤- **行为免疫 (Behavioral Immunity)**: 基于行为模式而非静态特征来检测威胁。## 📖 项目愿景 (Vision)- **AI 深度分析 (AI Cortex)**: 对模糊案例使用本地 LLM 进行自然语言推理，弥补规则引擎的刚性不足。
 
 │               BPF Ring Buffer                    │
 
-├────────────────────────┼─────────────────────────┤                    ├─────────────────────────────────────┤```
+├────────────────────────┼─────────────────────────┤                    │                                     │
 
 │  User Space (Rust)     │                         │
 
-│               ┌────────▼─────────┐               │                    │                                     │
+│               ┌────────▼─────────┐               │  ┌─────────────────┴─────────┐   ┌──────────────────────┴──────────┐### v0.4.0: All-in Linux + eBPF
 
 │               │  Event Consumer  │               │
 
-│               └────────┬─────────┘               │  ┌─────────────────┴─────────┐   ┌──────────────────────┴──────────┐┌─────────────────────────────────────────────────────────────┐- **行为免疫 (Behavioral Immunity)**: 基于行为模式而非静态特征来检测威胁。## 📖 项目愿景 (Vision)
+│               └────────┬─────────┘               │  │  antivirus-immunity-core  │   │  antivirus-immunity-ebpf        │
 
 │     ┌──────────────────┼──────────────────┐      │
 
-│     │                  │                  │      │  │  antivirus-immunity-core  │   │  antivirus-immunity-ebpf        │
+│     │                  │                  │      │  │  (Windows · Legacy v0.3)  │   │  (Linux · eBPF v0.4 · Active)  │- **危险信号理论 (Danger Theory)**: 通过监测系统压力信号（CPU 飙升、进程洪水等）动态调整免疫灵敏度。
 
 │  ┌──▼───────┐  ┌───────▼──────┐  ┌───────▼───┐  │
 
-│  │ Policy   │  │  AI Cortex   │  │ Effector  │  │  │  (Windows · Legacy v0.3)  │   │  (Linux · eBPF v0.4 · Active)  ││                    AI Cortex (大脑皮层)                       │
+│  │ Policy   │  │  AI Cortex   │  │ Effector  │  │  │                           │   │                                 │
 
 │  │ Engine   │  │  (Ollama)    │  │ (kill/    │  │
 
-│  │ (rules+  │  │              │  │  block/   │  │  │                           │   │                                 │
+│  │ (rules+  │  │              │  │  block/   │  │  │  ToolHelp32 进程扫描      │   │  eBPF 内核探针 (CO-RE)          │本版本的战略方向：**放弃 Windows 主战场，全面转向 Linux 云服务器 + eBPF 内核级监控。**
 
 │  │  profile)│  │              │  │  log)     │  │
 
-│  └──────────┘  └──────────────┘  └───────────┘  │  │  ToolHelp32 进程扫描      │   │  eBPF 内核探针 (CO-RE)          ││         Local LLM for deep analysis of ambiguous cases       │- **危险信号理论 (Danger Theory)**: 通过监测系统压力信号（CPU 飙升、进程洪水等）动态调整免疫灵敏度。
+│  └──────────┘  └──────────────┘  └───────────┘  │  │  YARA 规则引擎            │   │  进程/网络/文件/提权 监控       │
 
 │                       │                          │
 
-│               ┌───────▼───────┐                  │  │  YARA 规则引擎            │   │  进程/网络/文件/提权 监控       │
+│               ┌───────▼───────┐                  │  │  Windows API              │   │  Docker/K8s 容器感知            │- **AI 深度分析 (AI Cortex)**: 对模糊案例使用本地 LLM 进行自然语言推理，弥补规则引擎的刚性不足。- **自适应性 (Adaptability)**: 能够对未知的攻击手段做出反应。s-Immunity
 
 │               │    Logger     │                  │
 
-│               │   (JSONL)     │                  │  │  Windows API              │   │  Docker/K8s 容器感知            ││                   (Ollama + qwen2.5:3b)                      │
+│               │   (JSONL)     │                  │  └─────────┬─────────────────┘   │  策略引擎 + AI Agent 沙盒       │
 
 │               └───────────────┘                  │
 
-└──────────────────────────────────────────────────┘  └─────────┬─────────────────┘   │  策略引擎 + AI Agent 沙盒       │
+└──────────────────────────────────────────────────┘            │                     └──────────────┬──────────────────┘目标场景：
 
 ```
 
-            │                     └──────────────┬──────────────────┘├─────────────────────────────────────────────────────────────┤- **AI 深度分析 (AI Cortex)**: 对模糊案例使用本地 LLM 进行自然语言推理，弥补规则引擎的刚性不足。本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
+            │                                    │
 
 ### 内核探针挂载点
 
-            │                                    │
+            └────────────┬───────────────────────┘- ☁️ 云 ECS / VPS（阿里云、AWS、腾讯云）- **自适应性 (Adaptability)**: 能够对未知的攻击手段做出反应。
 
 | 探针 | 挂载点 | 功能 | Lite模式 |
 
-|------|--------|------|----------|            └────────────┬───────────────────────┘│                                                              │
+|------|--------|------|----------|                         │
 
 | 进程执行 | `tracepoint/syscalls/sys_enter_execve` | 捕获所有新进程 | ✅ |
 
-| TCP 外联 | `kprobe/tcp_connect` | 检测出站连接 (挖矿池/C2/反弹shell) | ✅ |                         │
+| TCP 外联 | `kprobe/tcp_connect` | 检测出站连接 | ✅ |            ┌────────────▼────────────────────┐- 🐳 Docker / Kubernetes 容器
 
 | 提权检测 | `kprobe/commit_creds` | UID 变更至 root | ✅ |
 
-| 文件访问 | `LSM/security_file_open` | 保护敏感文件 (/etc/shadow 等) | ❌ |            ┌────────────▼────────────────────┐│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐  │- **自适应性 (Adaptability)**: 能够对未知的攻击手段做出反应。- **自我识别 (Self/Non-Self Discrimination)**: 通过建立系统“正常态”的基线，识别入侵者。
+| 文件访问 | `LSM/security_file_open` | 保护敏感文件 | ❌ |            │  antivirus-immunity-common      │
 
 | 文件创建 | `LSM/security_inode_create` | 检测可疑文件写入 | ❌ |
 
-| 网络阻断 | `XDP / TC` | 内核级包过滤 | ❌ |            │  antivirus-immunity-common      │
+| 网络阻断 | `XDP / TC` | 内核级包过滤 | ❌ |            │  (跨平台共享层)                   │- 🤖 AI Agent 运行沙盒（LangChain, AutoGPT 等自动化 Agent 的边界护栏）本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件，并集成**本地 AI 模型**作为免疫决策中枢。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
 
 
 
----            │  (跨平台共享层)                   ││  │   Receptor    │  │   Immune     │  │    Effector       │  │
+---            │                                 │
 
 
+
+## 📦 项目结构            │  SecurityEvent 统一事件格式      │- 💡 轻量实例适配（1C1G / 2C2G 自动切换 Lite 模式）
+
+
+
+```            │  AI Cortex (Ollama LLM)         │
+
+Antivirus-Immunity/
+
+├── Cargo.toml                          # Workspace 定义            │  Logger (JSONL 结构化日志)       │## 🏗 架构设计 (Architecture)
+
+├── README.md
+
+├── USER_MANUAL.md            │  HashCache (LRU SHA256)         │
+
+├── .github/workflows/ci.yml           # GitHub Actions CI/CD
+
+│            └─────────────────────────────────┘---
+
+├── antivirus-immunity-common/          # 跨平台共享层
+
+│   ├── Cargo.toml```
+
+│   └── src/
+
+│       ├── lib.rs> **"A kind of Antivirus inspired by immune system, augmented with local AI."**
+
+│       ├── event.rs                    # SecurityEvent 统一类型
+
+│       ├── logger.rs                   # JSONL 结构化日志### eBPF 引擎架构
+
+│       ├── ai_cortex.rs               # Ollama LLM 接口
+
+│       └── hash_cache.rs             # LRU SHA256 缓存## 🏗 架构设计
+
+│
+
+├── antivirus-immunity-ebpf/            # Linux eBPF 引擎 (v0.4.0)```
+
+│   ├── Cargo.toml
+
+│   ├── build.sh┌──────────────────────────────────────────────────┐系统由四个核心层组成，模拟生物免疫回路：
+
+│   ├── bpf/probes.bpf.c               # CO-RE 内核探针 (C)
+
+│   └── src/│  Kernel Space (eBPF probes, C/CO-RE)             │
+
+│       ├── main.rs                     # CLI + 事件循环
+
+│       ├── probe.rs                    # eBPF 探针管理│  ┌───────────┐ ┌────────────┐ ┌───────────────┐ │```
+
+│       ├── container.rs               # Docker/K8s 容器上下文
+
+│       ├── policy.rs                  # 安全策略引擎│  │ execve    │ │ tcp_connect│ │ LSM file_open │ │
+
+│       ├── process_tree.rs            # 进程族谱追踪
+
+│       ├── resource_aware.rs          # 硬件感知 + Lite 模式│  │ tracepoint│ │ kprobe     │ │ bpf hook      │ │                    ┌─────────────────────────────────────┐- **自我识别 (Self/Non-Self Discrimination)**: 通过建立系统"正常态"的基线，识别入侵者。
+
+│       ├── network.rs                 # 网络连接监控
+
+│       └── filesystem.rs             # 文件系统护栏│  └─────┬─────┘ └──────┬─────┘ └───────┬───────┘ │
+
+│
+
+└── antivirus-immunity-core/            # Windows 引擎 (v0.3.0 · Legacy)│        └───────────────┼───────────────┘         │                    │         Workspace (Cargo)           │
+
+    ├── Cargo.toml
+
+    ├── antigens.yar│               BPF Ring Buffer                    │
+
+    └── src/
+
+        ├── main.rs├────────────────────────┼─────────────────────────┤                    ├─────────────────────────────────────┤```
+
+        ├── receptor/
+
+        ├── immune/│  User Space (Rust)     │                         │
+
+        └── effector/
+
+```│               ┌────────▼─────────┐               │                    │                                     │
+
+
+
+---│               │  Event Consumer  │               │
+
+
+
+## 🔧 安全策略 (Profiles)│               └────────┬─────────┘               │  ┌─────────────────┴─────────┐   ┌──────────────────────┴──────────┐┌─────────────────────────────────────────────────────────────┐- **行为免疫 (Behavioral Immunity)**: 基于行为模式而非静态特征来检测威胁。## 📖 项目愿景 (Vision)
+
+
+
+| Profile | 场景 | 网络 | 文件 | AI | 提权 |│     ┌──────────────────┼──────────────────┐      │
+
+|---------|------|------|------|-----|------|
+
+| **server** | 云服务器 | ✅ | ✅ | ✅ | ✅ |│     │                  │                  │      │  │  antivirus-immunity-core  │   │  antivirus-immunity-ebpf        │
+
+| **container** | Docker/K8s | ✅ | ✅ | ✅ | ✅ |
+
+| **ai-agent** | AI Agent 沙盒 | ✅ | ✅ | ✅ | ✅ |│  ┌──▼───────┐  ┌───────▼──────┐  ┌───────▼───┐  │
+
+| **lite** | 1C1G 轻量实例 | ✅ | ❌ | ❌ | ✅ |
+
+│  │ Policy   │  │  AI Cortex   │  │ Effector  │  │  │  (Windows · Legacy v0.3)  │   │  (Linux · eBPF v0.4 · Active)  ││                    AI Cortex (大脑皮层)                       │
+
+---
+
+│  │ Engine   │  │  (Ollama)    │  │ (kill/    │  │
+
+## 🚀 快速开始
+
+│  │ (rules+  │  │              │  │  block/   │  │  │                           │   │                                 │
+
+```bash
+
+# 前置要求 (Linux)│  │  profile)│  │              │  │  log)     │  │
+
+sudo apt install clang llvm libbpf-dev bpftool
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh│  └──────────┘  └──────────────┘  └───────────┘  │  │  ToolHelp32 进程扫描      │   │  eBPF 内核探针 (CO-RE)          ││         Local LLM for deep analysis of ambiguous cases       │- **危险信号理论 (Danger Theory)**: 通过监测系统压力信号（CPU 飙升、进程洪水等）动态调整免疫灵敏度。
+
+
+
+# 编译│                       │                          │
+
+cargo build --release
+
+│               ┌───────▼───────┐                  │  │  YARA 规则引擎            │   │  进程/网络/文件/提权 监控       │
+
+# 运行 (需要 root)
+
+sudo ./target/release/immunity-ebpf --profile server│               │    Logger     │                  │
+
+
+
+# AI Agent 沙盒模式│               │   (JSONL)     │                  │  │  Windows API              │   │  Docker/K8s 容器感知            ││                   (Ollama + qwen2.5:3b)                      │
+
+sudo ./target/release/immunity-ebpf --profile ai-agent --ai
+
+│               └───────────────┘                  │
+
+# Ollama (可选)
+
+curl -fsSL https://ollama.com/install.sh | sh└──────────────────────────────────────────────────┘  └─────────┬─────────────────┘   │  策略引擎 + AI Agent 沙盒       │
+
+ollama pull qwen2.5:3b
+
+``````
+
+
+
+---            │                     └──────────────┬──────────────────┘├─────────────────────────────────────────────────────────────┤- **AI 深度分析 (AI Cortex)**: 对模糊案例使用本地 LLM 进行自然语言推理，弥补规则引擎的刚性不足。本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
+
+
+
+## 🧬 生物学类比### 内核探针挂载点
+
+
+
+| 生物免疫 | 本项目组件 | 功能 |            │                                    │
+
+|----------|-----------|------|
+
+| Toll 样受体 | `probe.rs` | 入侵传感器 || 探针 | 挂载点 | 功能 | Lite模式 |
+
+| 抗原呈递 | `process_tree.rs` | 攻击链还原 |
+
+| T 细胞分化 | `policy.rs` | 杀伤/容忍/观察 ||------|--------|------|----------|            └────────────┬───────────────────────┘│                                                              │
+
+| 上皮屏障 | `filesystem.rs` | 关键文件保护 |
+
+| 补体系统 | `network.rs` | 网络巡逻 || 进程执行 | `tracepoint/syscalls/sys_enter_execve` | 捕获所有新进程 | ✅ |
+
+| 大脑皮层 | `ai_cortex.rs` | 深度智能分析 |
+
+| 免疫记忆 | `logger.rs` | 审计日志 || TCP 外联 | `kprobe/tcp_connect` | 检测出站连接 (挖矿池/C2/反弹shell) | ✅ |                         │
+
+| 新陈代谢调节 | `resource_aware.rs` | 节能模式 |
+
+| 组织定位 | `container.rs` | 容器环境感知 || 提权检测 | `kprobe/commit_creds` | UID 变更至 root | ✅ |
+
+
+
+---| 文件访问 | `LSM/security_file_open` | 保护敏感文件 (/etc/shadow 等) | ❌ |            ┌────────────▼────────────────────┐│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐  │- **自适应性 (Adaptability)**: 能够对未知的攻击手段做出反应。- **自我识别 (Self/Non-Self Discrimination)**: 通过建立系统“正常态”的基线，识别入侵者。
+
+
+
+## 🗺 路线图| 文件创建 | `LSM/security_inode_create` | 检测可疑文件写入 | ❌ |
+
+
+
+- [x] **v0.3.0** — Windows 引擎 (ToolHelp32 + YARA + AI Cortex)| 网络阻断 | `XDP / TC` | 内核级包过滤 | ❌ |            │  antivirus-immunity-common      │
+
+- [x] **v0.4.0** — Linux eBPF 架构骨架 + 策略引擎 + 容器感知 + CI/CD
+
+- [ ] **v0.5.0** — 真实 eBPF CO-RE 探针 (libbpf-rs) + Ring Buffer
+
+- [ ] **v0.6.0** — XDP/TC 网络阻断 + LSM 文件护栏
+
+- [ ] **v0.7.0** — K8s Sidecar + Prometheus metrics---            │  (跨平台共享层)                   ││  │   Receptor    │  │   Immune     │  │    Effector       │  │
+
+- [ ] **v1.0.0** — 生产就绪
+
+
+
+---
 
 ## 📦 项目结构            │                                 │
 
+## 📝 License
 
+
+
+MIT License
 
 ```            │  SecurityEvent 统一事件格式      ││  │   感知层      │  │   决策层      │  │    响应层          │  │- **行为免疫 (Behavioral Immunity)**: 基于行为模式而非静态特征来检测威胁。
 
+## 👤 Author
+
 Antivirus-Immunity/
+
+**KingDragon-yc** — [GitHub](https://github.com/KingDragon-yc)
 
 ├── Cargo.toml                          # Workspace 定义            │  AI Cortex (Ollama LLM)         │
 
