@@ -1,8 +1,9 @@
 use crate::receptor::toll_like_receptor::ProcessInfo;
+use crate::immune::path_validator::{PathValidator, PathVerdict};
+use crate::immune::danger_theory::DangerLevel;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{Read, Write};
 use yara_x::{Compiler, Rules, Scanner};
 
 const DB_FILE: &str = "immunity_db.json";
@@ -63,33 +64,28 @@ impl MemoryBCell {
 
 pub struct ImmuneSystem {
     memory_b_cell: MemoryBCell,
-    whitelist_names: HashSet<String>, // Innate immunity (Hardcoded names)
+    path_validator: PathValidator,
     yara_rules: Option<Rules>,
 }
 
+/// The assessment result from the immune system evaluation pipeline.
+/// Now includes much richer context for downstream consumers.
 #[derive(Debug)]
 pub enum Assessment {
+    /// Process is verified safe (trusted hash + verified path)
     Safe,
-    Critical(String),   // Confirmed Malware (YARA match)
-    Suspicious(String), // Anomaly (Whitelist mismatch)
+    /// Confirmed malware (YARA match)
+    Critical(String),
+    /// Anomaly detected (path imposter, unknown signature, etc.)
+    Suspicious(String),
+    /// Not enough information to classify — candidate for AI deep analysis
     Unknown,
+    /// Needs AI Cortex deep analysis (ambiguous signals)
+    NeedsAiReview(String),
 }
 
 impl ImmuneSystem {
     pub fn new() -> Self {
-        let mut whitelist_names = HashSet::new();
-        // Basic Windows Processes (Naive Innate Immunity)
-        whitelist_names.insert("svchost.exe".to_string());
-        whitelist_names.insert("explorer.exe".to_string());
-        whitelist_names.insert("System".to_string());
-        whitelist_names.insert("Registry".to_string());
-        whitelist_names.insert("smss.exe".to_string());
-        whitelist_names.insert("csrss.exe".to_string());
-        whitelist_names.insert("wininit.exe".to_string());
-        whitelist_names.insert("services.exe".to_string());
-        whitelist_names.insert("lsass.exe".to_string());
-        whitelist_names.insert("winlogon.exe".to_string());
-
         // Load YARA rules (Antigens)
         let yara_rules = Self::load_antigens().ok();
         if yara_rules.is_some() {
@@ -100,7 +96,7 @@ impl ImmuneSystem {
 
         Self {
             memory_b_cell: MemoryBCell::new(),
-            whitelist_names,
+            path_validator: PathValidator::new(),
             yara_rules,
         }
     }
@@ -137,15 +133,17 @@ impl ImmuneSystem {
         }
     }
 
-    pub fn evaluate(&self, process: &ProcessInfo) -> Assessment {
-        // 1. Memory B Cell Check (Adaptive Immunity - Whitelist)
-        if let Some(hash) = &process.hash {
-            if self.memory_b_cell.is_trusted(hash) {
-                return Assessment::Safe;
-            }
-        }
-
-        // 2. YARA Scan (Antigen Detection - Blacklist)
+    /// Multi-layered evaluation pipeline:
+    /// 1. YARA scan (blacklist) — immediate conviction
+    /// 2. Path validation (MHC check) — imposter detection
+    /// 3. Memory B Cell (adaptive immunity) — trusted hash check
+    /// 4. Danger level correlation — context-aware escalation
+    /// 5. Heuristics — catch remaining edge cases
+    pub fn evaluate(&self, process: &ProcessInfo, danger_level: &DangerLevel) -> Assessment {
+        // ========================================
+        // LAYER 1: YARA Scan (Antigen Detection — Blacklist)
+        // This is the highest priority — known malware signatures
+        // ========================================
         if let Some(rules) = &self.yara_rules {
             if let Some(path) = &process.path {
                 match Scanner::new(rules).scan_file(path) {
@@ -167,21 +165,132 @@ impl ImmuneSystem {
             }
         }
 
-        // 3. Innate Immunity (Name Check)
-        if self.whitelist_names.contains(&process.name) {
-            if process.hash.is_some() {
-                return Assessment::Suspicious(
-                    "Known name but unknown signature (Potential Imposter)".to_string(),
-                );
+        // ========================================
+        // LAYER 2: Path Validation (MHC Check)
+        // Critical system process impersonation is HIGH confidence malware
+        // ========================================
+        let path_verdict = self.path_validator.validate(
+            &process.name,
+            process.path.as_deref(),
+        );
+
+        match &path_verdict {
+            PathVerdict::Imposter { expected, actual } => {
+                // A process claims to be e.g. svchost.exe but runs from wrong path
+                // This is CRITICAL — almost certainly malware
+                return Assessment::Critical(format!(
+                    "PATH IMPOSTER: '{}' expected in [{}] but found in '{}'",
+                    process.name, expected, actual
+                ));
             }
-            return Assessment::Safe;
+            PathVerdict::NoPath => {
+                // Can't determine path for non-system PID — suspicious
+                if process.pid > 4 {
+                    // Don't flag System (PID 4) or Idle (PID 0)
+                    // If danger level is high, escalate
+                    if matches!(danger_level, DangerLevel::High | DangerLevel::Critical) {
+                        return Assessment::Suspicious(
+                            "Unable to determine path during high danger state".to_string(),
+                        );
+                    }
+                }
+            }
+            _ => {} // Verified, TrustedLocation, UnknownLocation — continue evaluation
         }
 
-        // 4. Heuristics
-        if process.path.is_none() && process.pid > 4 {
-            return Assessment::Unknown;
+        // ========================================
+        // LAYER 3: Memory B Cell Check (Adaptive Immunity)
+        // Trusted hash = previously learned as "self"
+        // ========================================
+        if let Some(hash) = &process.hash {
+            if self.memory_b_cell.is_trusted(hash) {
+                // Even trusted processes get flagged if path doesn't match
+                if matches!(path_verdict, PathVerdict::Verified | PathVerdict::TrustedLocation) {
+                    return Assessment::Safe;
+                }
+                // Trusted hash but unusual location — needs attention
+                if let PathVerdict::UnknownLocation { ref path } = path_verdict {
+                    return Assessment::NeedsAiReview(format!(
+                        "Trusted hash but running from unusual location: {}",
+                        path
+                    ));
+                }
+                return Assessment::Safe;
+            }
+        }
+
+        // ========================================
+        // LAYER 4: Danger Level Correlation
+        // During high system stress, be more aggressive with unknowns
+        // ========================================
+        match danger_level {
+            DangerLevel::Critical => {
+                if matches!(path_verdict, PathVerdict::UnknownLocation { .. }) {
+                    return Assessment::Suspicious(format!(
+                        "Unknown process during CRITICAL danger state: {}",
+                        process.name
+                    ));
+                }
+            }
+            DangerLevel::High => {
+                if matches!(path_verdict, PathVerdict::UnknownLocation { .. }) {
+                    return Assessment::NeedsAiReview(format!(
+                        "Unknown process during HIGH danger state: {}",
+                        process.name
+                    ));
+                }
+            }
+            _ => {}
+        }
+
+        // ========================================
+        // LAYER 5: Heuristics & AI Handoff
+        // Ambiguous cases are sent to AI Cortex for deep analysis
+        // ========================================
+        if let PathVerdict::Verified | PathVerdict::TrustedLocation = path_verdict {
+            // In a trusted directory but no hash match — likely legitimate new/updated software
+            // Safe under normal conditions, review under elevated danger
+            if matches!(danger_level, DangerLevel::Normal | DangerLevel::Elevated) {
+                return Assessment::Unknown;
+            }
+            return Assessment::NeedsAiReview(format!(
+                "Unrecognized process in trusted location during elevated danger: {}",
+                process.name
+            ));
+        }
+
+        // Unknown location + unknown hash = candidate for AI review
+        if process.hash.is_some() {
+            return Assessment::NeedsAiReview(format!(
+                "Unknown signature from non-standard location: {}",
+                process.path.as_deref().unwrap_or("N/A")
+            ));
         }
 
         Assessment::Unknown
     }
+
+    /// Get YARA match details for a specific file (used by AI context building)
+    pub fn get_yara_matches(&self, file_path: &str) -> Vec<String> {
+        if let Some(rules) = &self.yara_rules {
+            if let Ok(results) = Scanner::new(rules).scan_file(file_path) {
+                return results
+                    .matching_rules()
+                    .map(|r| r.identifier().to_string())
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Check if a hash is in the trusted database
+    pub fn is_hash_trusted(&self, hash: &str) -> bool {
+        self.memory_b_cell.is_trusted(hash)
+    }
+
+    /// Get path verdict string for AI context
+    pub fn get_path_verdict_string(&self, name: &str, path: Option<&str>) -> String {
+        format!("{:?}", self.path_validator.validate(name, path))
+    }
 }
+

@@ -1,5 +1,6 @@
 # Rust Build Artifacts
 /target
+**/target
 **/*.rs.bk
 
 # Compiled Executables
