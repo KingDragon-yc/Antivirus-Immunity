@@ -1,4 +1,4 @@
-# Antivirus-Immunity# Antivirus-Immuni
+# Antivirus-Immunity
 
 本项目旨在构建一个基于**人工免疫系统 (AIS)** 理论的端点安全防护软件，并集成**本地 AI 模型**作为免疫决策中枢。与依赖特征库的传统杀毒软件不同，Antivirus-Immunity 侧重于：
 
