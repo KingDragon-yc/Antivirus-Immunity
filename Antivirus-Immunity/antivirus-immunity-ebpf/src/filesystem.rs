@@ -83,15 +83,27 @@ impl FilesystemGuard {
             ProtectedPath {
                 path: "/etc/shadow".to_string(),
                 description: "密码 shadow 文件".to_string(),
-                deny_operations: vec![FileOperation::Open, FileOperation::Write, FileOperation::Delete],
-                allow_processes: vec!["passwd".to_string(), "useradd".to_string(), "usermod".to_string()],
+                deny_operations: vec![
+                    FileOperation::Open,
+                    FileOperation::Write,
+                    FileOperation::Delete,
+                ],
+                allow_processes: vec![
+                    "passwd".to_string(),
+                    "useradd".to_string(),
+                    "usermod".to_string(),
+                ],
                 is_recursive: false,
             },
             ProtectedPath {
                 path: "/etc/passwd".to_string(),
                 description: "用户数据库".to_string(),
                 deny_operations: vec![FileOperation::Write, FileOperation::Delete],
-                allow_processes: vec!["passwd".to_string(), "useradd".to_string(), "usermod".to_string()],
+                allow_processes: vec![
+                    "passwd".to_string(),
+                    "useradd".to_string(),
+                    "usermod".to_string(),
+                ],
                 is_recursive: false,
             },
             ProtectedPath {
@@ -105,7 +117,11 @@ impl FilesystemGuard {
             ProtectedPath {
                 path: "/root/.ssh/".to_string(),
                 description: "root SSH 密钥目录".to_string(),
-                deny_operations: vec![FileOperation::Create, FileOperation::Write, FileOperation::Delete],
+                deny_operations: vec![
+                    FileOperation::Create,
+                    FileOperation::Write,
+                    FileOperation::Delete,
+                ],
                 allow_processes: vec!["ssh-keygen".to_string(), "sshd".to_string()],
                 is_recursive: true,
             },
@@ -120,7 +136,11 @@ impl FilesystemGuard {
             ProtectedPath {
                 path: "/etc/cron.d/".to_string(),
                 description: "cron 配置目录".to_string(),
-                deny_operations: vec![FileOperation::Create, FileOperation::Write, FileOperation::Delete],
+                deny_operations: vec![
+                    FileOperation::Create,
+                    FileOperation::Write,
+                    FileOperation::Delete,
+                ],
                 allow_processes: vec!["crontab".to_string()],
                 is_recursive: true,
             },
@@ -151,8 +171,17 @@ impl FilesystemGuard {
             ProtectedPath {
                 path: "/lib/x86_64-linux-gnu/".to_string(),
                 description: "系统共享库目录".to_string(),
-                deny_operations: vec![FileOperation::Write, FileOperation::Create, FileOperation::Delete],
-                allow_processes: vec!["apt".to_string(), "dpkg".to_string(), "yum".to_string(), "rpm".to_string()],
+                deny_operations: vec![
+                    FileOperation::Write,
+                    FileOperation::Create,
+                    FileOperation::Delete,
+                ],
+                allow_processes: vec![
+                    "apt".to_string(),
+                    "dpkg".to_string(),
+                    "yum".to_string(),
+                    "rpm".to_string(),
+                ],
                 is_recursive: true,
             },
         ];

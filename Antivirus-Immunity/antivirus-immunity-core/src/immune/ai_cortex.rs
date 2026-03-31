@@ -117,7 +117,10 @@ impl AiCortex {
             Ok(resp) => {
                 self.available = resp.status().is_success();
                 if self.available {
-                    println!("[+] AI Cortex: Connected to Ollama at {}", self.config.endpoint);
+                    println!(
+                        "[+] AI Cortex: Connected to Ollama at {}",
+                        self.config.endpoint
+                    );
                     println!("[+] AI Cortex: Using model '{}'", self.config.model);
                 } else {
                     println!("[!] AI Cortex: Ollama responded with error. AI features disabled.");
@@ -126,9 +129,15 @@ impl AiCortex {
             }
             Err(_) => {
                 self.available = false;
-                println!("[!] AI Cortex: Cannot reach Ollama at {}. AI features disabled.", self.config.endpoint);
+                println!(
+                    "[!] AI Cortex: Cannot reach Ollama at {}. AI features disabled.",
+                    self.config.endpoint
+                );
                 println!("[*] AI Cortex: Falling back to rule-based evaluation.");
-                println!("[*] Hint: Install Ollama (https://ollama.ai) and run 'ollama pull {}'", self.config.model);
+                println!(
+                    "[*] Hint: Install Ollama (https://ollama.ai) and run 'ollama pull {}'",
+                    self.config.model
+                );
                 false
             }
         }
@@ -142,7 +151,7 @@ impl AiCortex {
         }
 
         let prompt = self.build_prompt(context);
-        
+
         let request = OllamaRequest {
             model: self.config.model.clone(),
             prompt,
@@ -154,7 +163,7 @@ impl AiCortex {
         };
 
         let url = format!("{}/api/generate", self.config.endpoint);
-        
+
         match self.client.post(&url).json(&request).send().await {
             Ok(resp) => {
                 if let Ok(ollama_resp) = resp.json::<OllamaResponse>().await {
@@ -172,7 +181,7 @@ impl AiCortex {
     /// Build the analysis prompt with structured context
     fn build_prompt(&self, ctx: &ProcessContext) -> String {
         format!(
-r#"You are a cybersecurity analyst AI embedded in an antivirus system.
+            r#"You are a cybersecurity analyst AI embedded in an antivirus system.
 Analyze the following process and determine if it is safe, suspicious, or malicious.
 
 ## Process Information
@@ -199,9 +208,17 @@ Analyze the following process and determine if it is safe, suspicious, or malici
             ctx.path.as_deref().unwrap_or("UNKNOWN"),
             ctx.hash.as_deref().unwrap_or("UNAVAILABLE"),
             ctx.path_verdict,
-            if ctx.yara_matches.is_empty() { "None".to_string() } else { ctx.yara_matches.join(", ") },
+            if ctx.yara_matches.is_empty() {
+                "None".to_string()
+            } else {
+                ctx.yara_matches.join(", ")
+            },
             ctx.danger_level,
-            if ctx.is_known_hash { "Yes (Trusted)" } else { "No (Unknown)" },
+            if ctx.is_known_hash {
+                "Yes (Trusted)"
+            } else {
+                "No (Unknown)"
+            },
         )
     }
 
@@ -209,7 +226,7 @@ Analyze the following process and determine if it is safe, suspicious, or malici
     fn parse_verdict(&self, response: &str) -> Option<AiVerdict> {
         // Try to extract JSON from the response
         let trimmed = response.trim();
-        
+
         // Try direct parse first
         if let Ok(verdict) = serde_json::from_str::<AiVerdict>(trimmed) {
             return Some(verdict);
@@ -231,7 +248,8 @@ Analyze the following process and determine if it is safe, suspicious, or malici
             "MALICIOUS"
         } else if lower.contains("suspicious") {
             "SUSPICIOUS"
-        } else if lower.contains("safe") || lower.contains("benign") || lower.contains("legitimate") {
+        } else if lower.contains("safe") || lower.contains("benign") || lower.contains("legitimate")
+        {
             "SAFE"
         } else {
             "UNCERTAIN"
@@ -240,7 +258,10 @@ Analyze the following process and determine if it is safe, suspicious, or malici
         Some(AiVerdict {
             classification: classification.to_string(),
             confidence: 0.5,
-            reasoning: format!("(Parsed from unstructured response) {}", &trimmed[..trimmed.len().min(300)]),
+            reasoning: format!(
+                "(Parsed from unstructured response) {}",
+                &trimmed[..trimmed.len().min(300)]
+            ),
             recommendation: match classification {
                 "MALICIOUS" => "TERMINATE".to_string(),
                 "SUSPICIOUS" => "MONITOR".to_string(),

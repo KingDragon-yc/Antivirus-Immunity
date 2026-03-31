@@ -154,7 +154,7 @@ impl TollLikeReceptor {
     fn get_process_details(&mut self, pid: u32) -> Option<(Option<String>, Option<String>)> {
         unsafe {
             let handle = SafeHandle::new(
-                OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid).ok()?
+                OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid).ok()?,
             )?;
 
             let mut buffer = [0u8; MAX_PATH as usize * 2];
@@ -192,4 +192,3 @@ pub struct ProcessInfo {
     pub path: Option<String>,
     pub hash: Option<String>,
 }
-

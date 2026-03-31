@@ -1,6 +1,6 @@
-use crate::receptor::toll_like_receptor::ProcessInfo;
-use crate::immune::path_validator::{PathValidator, PathVerdict};
 use crate::immune::danger_theory::DangerLevel;
+use crate::immune::path_validator::{PathValidator, PathVerdict};
+use crate::receptor::toll_like_receptor::ProcessInfo;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
@@ -169,10 +169,9 @@ impl ImmuneSystem {
         // LAYER 2: Path Validation (MHC Check)
         // Critical system process impersonation is HIGH confidence malware
         // ========================================
-        let path_verdict = self.path_validator.validate(
-            &process.name,
-            process.path.as_deref(),
-        );
+        let path_verdict = self
+            .path_validator
+            .validate(&process.name, process.path.as_deref());
 
         match &path_verdict {
             PathVerdict::Imposter { expected, actual } => {
@@ -205,7 +204,10 @@ impl ImmuneSystem {
         if let Some(hash) = &process.hash {
             if self.memory_b_cell.is_trusted(hash) {
                 // Even trusted processes get flagged if path doesn't match
-                if matches!(path_verdict, PathVerdict::Verified | PathVerdict::TrustedLocation) {
+                if matches!(
+                    path_verdict,
+                    PathVerdict::Verified | PathVerdict::TrustedLocation
+                ) {
                     return Assessment::Safe;
                 }
                 // Trusted hash but unusual location — needs attention
@@ -293,4 +295,3 @@ impl ImmuneSystem {
         format!("{:?}", self.path_validator.validate(name, path))
     }
 }
-

@@ -1,7 +1,7 @@
 //! Probe Manager — eBPF 探针管理
 //!
 //! 生物学类比：Toll 样受体 (TLR) — 先天免疫的传感器
-//! 
+//!
 //! 在完整 Linux 构建中，此模块负责：
 //! 1. 加载 CO-RE eBPF 对象 (.bpf.o)
 //! 2. Attach 到内核挂载点 (tracepoints, kprobes, LSM hooks)

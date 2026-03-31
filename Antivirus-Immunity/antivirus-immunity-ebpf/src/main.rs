@@ -34,21 +34,21 @@
 //! │              └───────────┘                   │
 //! └──────────────────────────────────────────────┘
 
-mod probe;
 mod container;
+mod filesystem;
+mod network;
 mod policy;
+mod probe;
 mod process_tree;
 mod resource_aware;
-mod network;
-mod filesystem;
 
 use antivirus_immunity_common::{
     ai_cortex::{AiCortex, AiCortexConfig},
-    event::{SecurityEvent, SecurityEventType, Severity, DangerLevel},
+    event::{DangerLevel, SecurityEvent, SecurityEventType, Severity},
     logger::Logger,
 };
-use clap::Parser;
 use chrono::Utc;
+use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -112,11 +112,17 @@ async fn main() -> anyhow::Result<()> {
     println!("║        Cloud-Native Linux Security · eBPF + AI Cortex      ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
-    println!("[*] Hardware: {} CPU(s), {} MB RAM", hw_profile.cpu_count, hw_profile.memory_mb);
+    println!(
+        "[*] Hardware: {} CPU(s), {} MB RAM",
+        hw_profile.cpu_count, hw_profile.memory_mb
+    );
     if lite_mode {
         println!("[!] LITE MODE: Low-resource instance detected (< 2C4G).");
         println!("[!] Heavy scans suspended. Core eBPF monitoring only.");
-        println!("[!] Memory budget capped at {} MB.", args.max_memory_mb.min(50));
+        println!(
+            "[!] Memory budget capped at {} MB.",
+            args.max_memory_mb.min(50)
+        );
     }
     println!("[*] Mode: {}", args.mode);
     println!("[*] Profile: {}", args.profile);
@@ -129,7 +135,8 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // ==================== POLICY ENGINE ====================
-    let protected_paths: Vec<String> = args.protected_paths
+    let protected_paths: Vec<String> = args
+        .protected_paths
         .split(',')
         .map(|s| s.trim().to_string())
         .collect();
@@ -141,8 +148,11 @@ async fn main() -> anyhow::Result<()> {
         args.whitelist.as_deref(),
     );
 
-    println!("[*] Policy Engine: {} rules loaded, {} protected paths",
-        policy.rule_count(), policy.protected_path_count());
+    println!(
+        "[*] Policy Engine: {} rules loaded, {} protected paths",
+        policy.rule_count(),
+        policy.protected_path_count()
+    );
 
     // ==================== AI CORTEX ====================
     let mut ai_cortex = AiCortex::new(AiCortexConfig {
@@ -174,7 +184,10 @@ async fn main() -> anyhow::Result<()> {
         container_id: None,
         detail: format!(
             "eBPF engine started: mode={}, profile={}, lite={}, ai={}",
-            args.mode, args.profile, lite_mode, args.ai && !lite_mode,
+            args.mode,
+            args.profile,
+            lite_mode,
+            args.ai && !lite_mode,
         ),
         action_taken: None,
         ai_verdict: None,
@@ -209,7 +222,10 @@ async fn main() -> anyhow::Result<()> {
 
     println!("[!] Press Ctrl+C to stop.");
     println!();
-    println!("{:<8} {:<20} {:<12} {:<15} {:<}", "PID", "COMM", "CONTAINER", "VERDICT", "DETAIL");
+    println!(
+        "{:<8} {:<20} {:<12} {:<15} {:<}",
+        "PID", "COMM", "CONTAINER", "VERDICT", "DETAIL"
+    );
     println!("{:-<8} {:-<20} {:-<12} {:-<15} {:-<50}", "", "", "", "", "");
 
     // ==================== MAIN EVENT LOOP ====================
@@ -228,15 +244,18 @@ async fn main() -> anyhow::Result<()> {
             // Policy evaluation
             let verdict = policy.evaluate(&event, container_id.as_deref(), &parent_chain);
 
-            let container_label = container_id.as_deref()
+            let container_label = container_id
+                .as_deref()
                 .map(|id| &id[..id.len().min(12)])
                 .unwrap_or("HOST");
 
             let verdict_str = format!("{:?}", verdict.action);
             let detail = &event.detail;
 
-            println!("{:<8} {:<20} {:<12} {:<15} {:.50}",
-                event.pid, event.comm, container_label, verdict_str, detail);
+            println!(
+                "{:<8} {:<20} {:<12} {:<15} {:.50}",
+                event.pid, event.comm, container_label, verdict_str, detail
+            );
 
             // Log
             logger.log(&SecurityEvent {

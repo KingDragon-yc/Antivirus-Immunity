@@ -85,7 +85,11 @@ impl AiCortex {
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
             .unwrap_or_default();
-        Self { config, client, available: false }
+        Self {
+            config,
+            client,
+            available: false,
+        }
     }
 
     pub async fn health_check(&mut self) -> bool {
@@ -98,7 +102,10 @@ impl AiCortex {
             Ok(resp) => {
                 self.available = resp.status().is_success();
                 if self.available {
-                    println!("[+] AI Cortex: Connected to Ollama at {}", self.config.endpoint);
+                    println!(
+                        "[+] AI Cortex: Connected to Ollama at {}",
+                        self.config.endpoint
+                    );
                     println!("[+] AI Cortex: Model '{}'", self.config.model);
                 } else {
                     println!("[!] AI Cortex: Ollama error. AI disabled.");
@@ -107,7 +114,10 @@ impl AiCortex {
             }
             Err(_) => {
                 self.available = false;
-                println!("[!] AI Cortex: Cannot reach Ollama at {}. Falling back to rules.", self.config.endpoint);
+                println!(
+                    "[!] AI Cortex: Cannot reach Ollama at {}. Falling back to rules.",
+                    self.config.endpoint
+                );
                 false
             }
         }
@@ -146,7 +156,7 @@ impl AiCortex {
 
     fn build_prompt(&self, ctx: &ProcessContext) -> String {
         format!(
-r#"You are a cybersecurity analyst AI embedded in a Linux cloud-native security system (eBPF-based).
+            r#"You are a cybersecurity analyst AI embedded in a Linux cloud-native security system (eBPF-based).
 Analyze the following process and determine if it is safe, suspicious, or malicious.
 
 ## Process Information
@@ -180,9 +190,21 @@ Consider:
             ctx.hash.as_deref().unwrap_or("N/A"),
             ctx.cmdline.as_deref().unwrap_or("N/A"),
             ctx.container_id.as_deref().unwrap_or("HOST"),
-            if ctx.parent_chain.is_empty() { "N/A".to_string() } else { ctx.parent_chain.join(" → ") },
-            if ctx.network_activity.is_empty() { "None".to_string() } else { ctx.network_activity.join("; ") },
-            if ctx.file_access.is_empty() { "None".to_string() } else { ctx.file_access.join("; ") },
+            if ctx.parent_chain.is_empty() {
+                "N/A".to_string()
+            } else {
+                ctx.parent_chain.join(" → ")
+            },
+            if ctx.network_activity.is_empty() {
+                "None".to_string()
+            } else {
+                ctx.network_activity.join("; ")
+            },
+            if ctx.file_access.is_empty() {
+                "None".to_string()
+            } else {
+                ctx.file_access.join("; ")
+            },
             ctx.danger_level,
             if ctx.is_known_hash { "Yes" } else { "No" },
         )

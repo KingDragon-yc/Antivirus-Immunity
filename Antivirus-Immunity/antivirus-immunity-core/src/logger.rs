@@ -105,13 +105,7 @@ impl Logger {
     }
 
     /// Log an action taken against a threat
-    pub fn log_action(
-        &self,
-        pid: u32,
-        name: &str,
-        action: &str,
-        detail: &str,
-    ) {
+    pub fn log_action(&self, pid: u32, name: &str, action: &str, detail: &str) {
         self.log(&SecurityEvent {
             timestamp: Utc::now(),
             event_type: EventType::ThreatEliminated,

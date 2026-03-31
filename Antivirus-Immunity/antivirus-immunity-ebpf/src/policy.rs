@@ -8,7 +8,7 @@
 //! - container: Docker/K8s 容器重点防护
 //! - ai-agent: AI Agent 沙盒护栏（宽松执行 + 严格边界）
 
-use crate::probe::{RawProbeEvent, ProbeType};
+use crate::probe::{ProbeType, RawProbeEvent};
 use antivirus_immunity_common::event::{ResponseAction, Severity};
 use std::collections::HashSet;
 
@@ -47,11 +47,30 @@ impl PolicyEngine {
         let mut whitelist_comms = HashSet::new();
         // Default whitelist — common legitimate cloud processes
         for comm in &[
-            "sshd", "systemd", "dockerd", "containerd", "containerd-shim",
-            "kubelet", "kube-proxy", "etcd", "nginx", "apache2", "httpd",
-            "mysqld", "postgres", "redis-server", "mongod",
-            "node", "python3", "python", "java", "go",
-            "cron", "rsyslogd", "journald", "NetworkManager",
+            "sshd",
+            "systemd",
+            "dockerd",
+            "containerd",
+            "containerd-shim",
+            "kubelet",
+            "kube-proxy",
+            "etcd",
+            "nginx",
+            "apache2",
+            "httpd",
+            "mysqld",
+            "postgres",
+            "redis-server",
+            "mongod",
+            "node",
+            "python3",
+            "python",
+            "java",
+            "go",
+            "cron",
+            "rsyslogd",
+            "journald",
+            "NetworkManager",
         ] {
             whitelist_comms.insert(comm.to_string());
         }
@@ -59,8 +78,8 @@ impl PolicyEngine {
         // AI Agent profile adds more permissive entries
         if profile == "ai-agent" {
             for comm in &[
-                "pip", "pip3", "npm", "npx", "cargo", "rustc", "gcc", "g++",
-                "make", "cmake", "git", "curl", "wget",
+                "pip", "pip3", "npm", "npx", "cargo", "rustc", "gcc", "g++", "make", "cmake",
+                "git", "curl", "wget",
             ] {
                 whitelist_comms.insert(comm.to_string());
             }
@@ -158,9 +177,9 @@ impl PolicyEngine {
 
         // AI Agent profile: check if parent chain is legitimate
         if self.profile == "ai-agent" {
-            let has_agent_parent = parent_chain.iter().any(|p|
-                p.contains("python") || p.contains("node") || p.contains("agent")
-            );
+            let has_agent_parent = parent_chain
+                .iter()
+                .any(|p| p.contains("python") || p.contains("node") || p.contains("agent"));
             if has_agent_parent {
                 // AI Agent spawning sub-processes — expected behavior
                 return PolicyVerdict {
@@ -175,9 +194,10 @@ impl PolicyEngine {
         if container_id.is_some() {
             // Suspicious: reverse shell-like patterns
             if event.comm == "sh" || event.comm == "bash" || event.comm == "dash" {
-                if parent_chain.iter().any(|p|
-                    p.contains("python") || p.contains("perl") || p.contains("ruby")
-                ) {
+                if parent_chain
+                    .iter()
+                    .any(|p| p.contains("python") || p.contains("perl") || p.contains("ruby"))
+                {
                     return PolicyVerdict {
                         action: if self.mode == "enforce" {
                             ResponseAction::Terminate

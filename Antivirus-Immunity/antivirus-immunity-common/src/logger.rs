@@ -28,7 +28,10 @@ impl Logger {
         let log_dir = PathBuf::from(dir);
         fs::create_dir_all(&log_dir)?;
         let current_log = log_dir.join("immunity.jsonl");
-        Ok(Self { log_dir, current_log })
+        Ok(Self {
+            log_dir,
+            current_log,
+        })
     }
 
     /// Log a security event

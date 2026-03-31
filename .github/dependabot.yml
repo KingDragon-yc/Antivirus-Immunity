@@ -12,6 +12,10 @@ updates:
     labels:
       - "dependencies"
       - "rust"
+    # 仅允许 patch + minor 升级，阻止 major（breaking changes）
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions versions
   - package-ecosystem: "github-actions"
@@ -22,3 +26,7 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+    # 锁定 Actions 大版本
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

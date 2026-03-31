@@ -1,185 +1,367 @@
-# ==========================================================
-# Antivirus-Immunity — CI/CD Pipeline
-# ==========================================================
-#
-# Matrix build:
-#   - Linux (ubuntu-latest): common + ebpf crates
-#   - Windows (windows-latest): common + core crates
-#
-# Triggers: push/PR to main
-# ==========================================================
+# ==========================================================# ==========================================================
 
-name: CI
+# Antivirus-Immunity — CI/CD Pipeline# Antivirus-Immunity — CI/CD Pipeline
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+# ==========================================================# ==========================================================
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+##
 
-jobs:
-  # ============================
-  # Linux: common + ebpf
-  # ============================
-  linux:
-    name: Linux (common + ebpf)
-    runs-on: ubuntu-latest
+# Matrix:# Matrix build:
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+#   Linux  → common + ebpf (needs protobuf-compiler, cmake for yara-x)#   - Linux (ubuntu-latest): common + ebpf crates
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+#   Windows → common + core (needs windows crate)#   - Windows (windows-latest): common + core crates
 
-      - name: Cache Cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
+##
+
+# Triggers: push/PR to main# Triggers: push/PR to main
+
+# ==========================================================# ==========================================================
+
+
+
+name: CIname: CI
+
+
+
+on:on:
+
+  push:  push:
+
+    branches: [ main ]    branches: [ main ]
+
+  pull_request:  pull_request:
+
+    branches: [ main ]    branches: [ main ]
+
+
+
+env:env:
+
+  CARGO_TERM_COLOR: always  CARGO_TERM_COLOR: always
+
+  RUST_BACKTRACE: 1  RUST_BACKTRACE: 1
+
+
+
+jobs:jobs:
+
+  # ============================  # ============================
+
+  # Linux: common + ebpf  # Linux: common + ebpf
+
+  # ============================  # ============================
+
+  linux:  linux:
+
+    name: Linux (common + ebpf)    name: Linux (common + ebpf)
+
+    runs-on: ubuntu-latest    runs-on: ubuntu-latest
+
+
+
+    steps:    steps:
+
+      - name: Checkout      - name: Checkout
+
+        uses: actions/checkout@v4        uses: actions/checkout@v4
+
+
+
+      - name: Install system dependencies      - name: Install Rust toolchain
+
+        run: |        uses: dtolnay/rust-toolchain@stable
+
+          sudo apt-get update        with:
+
+          sudo apt-get install -y protobuf-compiler cmake pkg-config libssl-dev          components: clippy, rustfmt
+
+
+
+      - name: Install Rust toolchain      - name: Cache Cargo registry & build
+
+        uses: dtolnay/rust-toolchain@stable        uses: actions/cache@v4
+
+        with:        with:
+
+          components: clippy, rustfmt          path: |
+
             ~/.cargo/registry
+
+      - name: Cache Cargo            ~/.cargo/git
+
+        uses: actions/cache@v4            Antivirus-Immunity/target
+
+        with:          key: linux-cargo-${{ hashFiles('Antivirus-Immunity/**/Cargo.lock') }}
+
+          path: |          restore-keys: |
+
+            ~/.cargo/registry            linux-cargo-
+
             ~/.cargo/git
-            Antivirus-Immunity/target
-          key: linux-cargo-${{ hashFiles('Antivirus-Immunity/**/Cargo.lock') }}
-          restore-keys: |
-            linux-cargo-
 
-      - name: Check formatting
-        working-directory: Antivirus-Immunity
-        run: |
+            Antivirus-Immunity/target      - name: Check formatting
+
+          key: linux-${{ hashFiles('Antivirus-Immunity/**/Cargo.lock') }}        working-directory: Antivirus-Immunity
+
+          restore-keys: linux-        run: |
+
           cargo fmt --package antivirus-immunity-common -- --check
-          cargo fmt --package antivirus-immunity-ebpf -- --check
 
-      - name: Clippy lint (common)
+      - name: Formatting check          cargo fmt --package antivirus-immunity-ebpf -- --check
+
         working-directory: Antivirus-Immunity
-        run: cargo clippy --package antivirus-immunity-common -- -D warnings
 
-      - name: Clippy lint (ebpf)
+        run: cargo fmt --all -- --check      - name: Clippy lint (common)
+
         working-directory: Antivirus-Immunity
-        run: cargo clippy --package antivirus-immunity-ebpf -- -D warnings 2>&1 || true
-        # NOTE: ebpf crate has expected dead_code warnings for infrastructure modules
-        #       not yet wired into the event loop. We allow these for now.
 
-      - name: Build (common)
+      - name: Clippy (common)        run: cargo clippy --package antivirus-immunity-common -- -D warnings
+
         working-directory: Antivirus-Immunity
-        run: cargo build --package antivirus-immunity-common
 
-      - name: Build (ebpf — debug)
+        run: cargo clippy --package antivirus-immunity-common -- -D warnings      - name: Clippy lint (ebpf)
+
         working-directory: Antivirus-Immunity
-        run: cargo build --package antivirus-immunity-ebpf
 
-      - name: Build (ebpf — release)
-        working-directory: Antivirus-Immunity
-        run: cargo build --package antivirus-immunity-ebpf --release
+      - name: Clippy (ebpf — allow dead_code)        run: cargo clippy --package antivirus-immunity-ebpf -- -D warnings 2>&1 || true
 
-      - name: Test (common)
-        working-directory: Antivirus-Immunity
-        run: cargo test --package antivirus-immunity-common
+        working-directory: Antivirus-Immunity        # NOTE: ebpf crate has expected dead_code warnings for infrastructure modules
 
-      - name: Test (ebpf)
-        working-directory: Antivirus-Immunity
-        run: cargo test --package antivirus-immunity-ebpf
+        run: cargo clippy --package antivirus-immunity-ebpf -- -A dead_code -D warnings        #       not yet wired into the event loop. We allow these for now.
 
-      - name: Upload Linux binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: immunity-ebpf-linux-x86_64
-          path: Antivirus-Immunity/target/release/immunity-ebpf
-          if-no-files-found: warn
 
-  # ============================
-  # Windows: common + core
-  # ============================
-  windows:
-    name: Windows (common + core)
-    runs-on: windows-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Build common      - name: Build (common)
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+        working-directory: Antivirus-Immunity        working-directory: Antivirus-Immunity
 
-      - name: Cache Cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            Antivirus-Immunity\target
-          key: windows-cargo-${{ hashFiles('Antivirus-Immunity/**/Cargo.lock') }}
-          restore-keys: |
+        run: cargo build --package antivirus-immunity-common        run: cargo build --package antivirus-immunity-common
+
+
+
+      - name: Build ebpf (debug)      - name: Build (ebpf — debug)
+
+        working-directory: Antivirus-Immunity        working-directory: Antivirus-Immunity
+
+        run: cargo build --package antivirus-immunity-ebpf        run: cargo build --package antivirus-immunity-ebpf
+
+
+
+      - name: Build ebpf (release)      - name: Build (ebpf — release)
+
+        working-directory: Antivirus-Immunity        working-directory: Antivirus-Immunity
+
+        run: cargo build --package antivirus-immunity-ebpf --release        run: cargo build --package antivirus-immunity-ebpf --release
+
+
+
+      - name: Test common      - name: Test (common)
+
+        working-directory: Antivirus-Immunity        working-directory: Antivirus-Immunity
+
+        run: cargo test --package antivirus-immunity-common        run: cargo test --package antivirus-immunity-common
+
+
+
+      - name: Test ebpf      - name: Test (ebpf)
+
+        working-directory: Antivirus-Immunity        working-directory: Antivirus-Immunity
+
+        run: cargo test --package antivirus-immunity-ebpf        run: cargo test --package antivirus-immunity-ebpf
+
+
+
+      - name: Upload binary      - name: Upload Linux binary
+
+        uses: actions/upload-artifact@v4        uses: actions/upload-artifact@v4
+
+        with:        with:
+
+          name: immunity-ebpf-linux-x86_64          name: immunity-ebpf-linux-x86_64
+
+          path: Antivirus-Immunity/target/release/immunity-ebpf          path: Antivirus-Immunity/target/release/immunity-ebpf
+
+          if-no-files-found: warn          if-no-files-found: warn
+
+
+
+  # ============================  # ============================
+
+  # Windows: common + core  # Windows: common + core
+
+  # ============================  # ============================
+
+  windows:  windows:
+
+    name: Windows (common + core)    name: Windows (common + core)
+
+    runs-on: windows-latest    runs-on: windows-latest
+
+
+
+    steps:    steps:
+
+      - name: Checkout      - name: Checkout
+
+        uses: actions/checkout@v4        uses: actions/checkout@v4
+
+
+
+      - name: Install Rust toolchain      - name: Install Rust toolchain
+
+        uses: dtolnay/rust-toolchain@stable        uses: dtolnay/rust-toolchain@stable
+
+        with:        with:
+
+          components: clippy, rustfmt          components: clippy, rustfmt
+
+
+
+      - name: Cache Cargo      - name: Cache Cargo registry & build
+
+        uses: actions/cache@v4        uses: actions/cache@v4
+
+        with:        with:
+
+          path: |          path: |
+
+            ~\.cargo\registry            ~\.cargo\registry
+
+            ~\.cargo\git            ~\.cargo\git
+
+            Antivirus-Immunity\target            Antivirus-Immunity\target
+
+          key: windows-${{ hashFiles('Antivirus-Immunity/**/Cargo.lock') }}          key: windows-cargo-${{ hashFiles('Antivirus-Immunity/**/Cargo.lock') }}
+
+          restore-keys: windows-          restore-keys: |
+
             windows-cargo-
 
-      - name: Check formatting
-        working-directory: Antivirus-Immunity
-        run: |
-          cargo fmt --package antivirus-immunity-common -- --check
-          cargo fmt --package antivirus-immunity-core -- --check
+      - name: Formatting check
 
-      - name: Clippy lint (common)
-        working-directory: Antivirus-Immunity
+        working-directory: Antivirus-Immunity      - name: Check formatting
+
+        run: cargo fmt --all -- --check        working-directory: Antivirus-Immunity
+
+        run: |
+
+      - name: Clippy (common)          cargo fmt --package antivirus-immunity-common -- --check
+
+        working-directory: Antivirus-Immunity          cargo fmt --package antivirus-immunity-core -- --check
+
         run: cargo clippy --package antivirus-immunity-common -- -D warnings
 
-      - name: Clippy lint (core)
-        working-directory: Antivirus-Immunity
-        run: cargo clippy --package antivirus-immunity-core -- -D warnings 2>&1 || exit 0
-        # NOTE: core crate may have platform-specific warnings on CI
+      - name: Clippy lint (common)
 
-      - name: Build (common)
+      - name: Clippy (core — allow dead_code)        working-directory: Antivirus-Immunity
+
+        working-directory: Antivirus-Immunity        run: cargo clippy --package antivirus-immunity-common -- -D warnings
+
+        run: cargo clippy --package antivirus-immunity-core -- -A dead_code
+
+        continue-on-error: true      - name: Clippy lint (core)
+
         working-directory: Antivirus-Immunity
+
+      - name: Build common        run: cargo clippy --package antivirus-immunity-core -- -D warnings 2>&1 || exit 0
+
+        working-directory: Antivirus-Immunity        # NOTE: core crate may have platform-specific warnings on CI
+
         run: cargo build --package antivirus-immunity-common
 
-      - name: Build (core — debug)
-        working-directory: Antivirus-Immunity
+      - name: Build (common)
+
+      - name: Build core (debug)        working-directory: Antivirus-Immunity
+
+        working-directory: Antivirus-Immunity        run: cargo build --package antivirus-immunity-common
+
         run: cargo build --package antivirus-immunity-core
 
-      - name: Build (core — release)
-        working-directory: Antivirus-Immunity
+      - name: Build (core — debug)
+
+      - name: Build core (release)        working-directory: Antivirus-Immunity
+
+        working-directory: Antivirus-Immunity        run: cargo build --package antivirus-immunity-core
+
         run: cargo build --package antivirus-immunity-core --release
 
-      - name: Test (common)
-        working-directory: Antivirus-Immunity
+      - name: Build (core — release)
+
+      - name: Test common        working-directory: Antivirus-Immunity
+
+        working-directory: Antivirus-Immunity        run: cargo build --package antivirus-immunity-core --release
+
         run: cargo test --package antivirus-immunity-common
 
-      - name: Test (core)
-        working-directory: Antivirus-Immunity
+      - name: Test (common)
+
+      - name: Test core        working-directory: Antivirus-Immunity
+
+        working-directory: Antivirus-Immunity        run: cargo test --package antivirus-immunity-common
+
         run: cargo test --package antivirus-immunity-core
 
-      - name: Upload Windows binary
-        uses: actions/upload-artifact@v4
+      - name: Test (core)
+
+      - name: Upload binary        working-directory: Antivirus-Immunity
+
+        uses: actions/upload-artifact@v4        run: cargo test --package antivirus-immunity-core
+
         with:
+
+          name: immunity-core-windows-x86_64      - name: Upload Windows binary
+
+          path: Antivirus-Immunity\target\release\antivirus-immunity-core.exe        uses: actions/upload-artifact@v4
+
+          if-no-files-found: warn        with:
+
           name: immunity-core-windows-x86_64
-          path: Antivirus-Immunity\target\release\antivirus-immunity-core.exe
-          if-no-files-found: warn
+
+  # ============================          path: Antivirus-Immunity\target\release\antivirus-immunity-core.exe
+
+  # Security audit          if-no-files-found: warn
 
   # ============================
-  # Linux cross-compile: aarch64 (ARM64)
-  # For AWS Graviton / ARM cloud instances
-  # ============================
+
+  audit:  # ============================
+
+    name: Security Audit  # Linux cross-compile: aarch64 (ARM64)
+
+    runs-on: ubuntu-latest  # For AWS Graviton / ARM cloud instances
+
+    continue-on-error: true  # ============================
+
   linux-arm64:
-    name: Linux ARM64 (cross-compile)
-    runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout
+    steps:    name: Linux ARM64 (cross-compile)
+
+      - name: Checkout    runs-on: ubuntu-latest
+
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain + aarch64 target
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
+    steps:
 
-      - name: Install cross-compilation tools
-        run: |
+      - name: Install Rust      - name: Checkout
+
+        uses: dtolnay/rust-toolchain@stable        uses: actions/checkout@v4
+
+
+
+      - name: Install cargo-audit      - name: Install Rust toolchain + aarch64 target
+
+        run: cargo install cargo-audit        uses: dtolnay/rust-toolchain@stable
+
+        with:
+
+      - name: Audit          targets: aarch64-unknown-linux-gnu
+
+        working-directory: Antivirus-Immunity
+
+        run: cargo audit      - name: Install cross-compilation tools
+
+        continue-on-error: true        run: |
+
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 

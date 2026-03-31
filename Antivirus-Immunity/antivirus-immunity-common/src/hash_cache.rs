@@ -68,7 +68,9 @@ impl HashCache {
         let mut buf = [0u8; 8192];
         loop {
             let n = file.read(&mut buf)?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             hasher.update(&buf[..n]);
         }
         Ok(hex::encode(hasher.finalize()))
@@ -76,7 +78,11 @@ impl HashCache {
 
     pub fn hit_ratio(&self) -> f64 {
         let total = self.hits + self.misses;
-        if total == 0 { 0.0 } else { self.hits as f64 / total as f64 }
+        if total == 0 {
+            0.0
+        } else {
+            self.hits as f64 / total as f64
+        }
     }
 
     pub fn stats_summary(&self) -> String {
