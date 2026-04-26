@@ -161,12 +161,12 @@ impl ProbeManager {
         // Read cgroup path to derive container ID
         std::fs::read_to_string(format!("/proc/{}/cgroup", pid))
             .ok()
-            .and_then(|s| {
+            .map(|s| {
                 // Hash the cgroup path as a rough ID
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 s.hash(&mut hasher);
-                Some(hasher.finish())
+                hasher.finish()
             })
             .unwrap_or(0)
     }
