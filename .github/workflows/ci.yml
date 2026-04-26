@@ -79,27 +79,6 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Configure OpenSSL (Windows)
-        shell: pwsh
-        run: |
-          # Install/upgrade OpenSSL dev package (provides libcrypto.lib + headers)
-          choco upgrade openssl --yes --no-progress
-          # Locate the installation root (must have headers)
-          $opensslDir = @('C:\Program Files\OpenSSL-Win64', 'C:\Program Files\OpenSSL') |
-            Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
-          if (-not $opensslDir) { Write-Error "OpenSSL headers not found"; exit 1 }
-          # Recursively find libcrypto.lib under the installation root
-          $libFile = Get-ChildItem -Path $opensslDir -Recurse -Filter 'libcrypto.lib' `
-                       -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $libFile) { Write-Error "libcrypto.lib not found under $opensslDir"; exit 1 }
-          $libDir = $libFile.DirectoryName
-          Write-Host "OPENSSL_DIR         = $opensslDir"
-          Write-Host "OPENSSL_INCLUDE_DIR = $opensslDir\include"
-          Write-Host "OPENSSL_LIB_DIR     = $libDir"
-          "OPENSSL_DIR=$opensslDir"                 >> $env:GITHUB_ENV
-          "OPENSSL_INCLUDE_DIR=$opensslDir\include" >> $env:GITHUB_ENV
-          "OPENSSL_LIB_DIR=$libDir"                 >> $env:GITHUB_ENV
-
       - uses: actions/cache@v4
         with:
           path: |
