@@ -82,9 +82,21 @@ jobs:
       - name: Configure OpenSSL (Windows)
         shell: pwsh
         run: |
-          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=C:\Program Files\OpenSSL\include" >> $env:GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL\lib\VC\x64\MD" >> $env:GITHUB_ENV
+          # Ensure OpenSSL (with developer libs) is installed
+          choco install openssl --yes --no-progress 2>&1 | Out-Null
+          # Locate the installation directory
+          $opensslDir = @('C:\Program Files\OpenSSL-Win64', 'C:\Program Files\OpenSSL') |
+            Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
+          if (-not $opensslDir) { Write-Error "OpenSSL not found after install"; exit 1 }
+          # Locate the lib directory that actually contains libcrypto.lib
+          $libDir = @("$opensslDir\lib\VC\x64\MD", "$opensslDir\lib") |
+            Where-Object { Test-Path "$_\libcrypto.lib" } | Select-Object -First 1
+          if (-not $libDir) { Write-Error "libcrypto.lib not found under $opensslDir"; exit 1 }
+          Write-Host "OpenSSL dir : $opensslDir"
+          Write-Host "OpenSSL lib : $libDir"
+          "OPENSSL_DIR=$opensslDir"             >> $env:GITHUB_ENV
+          "OPENSSL_INCLUDE_DIR=$opensslDir\include" >> $env:GITHUB_ENV
+          "OPENSSL_LIB_DIR=$libDir"             >> $env:GITHUB_ENV
 
       - uses: actions/cache@v4
         with:
