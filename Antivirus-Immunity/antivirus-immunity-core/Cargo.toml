@@ -18,7 +18,7 @@ chrono = { version = "0.4", features = ["serde"] }
 lru = "0.12"
 reqwest = { version = "0.12", features = ["json"] }
 sysinfo = "0.31"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.23", features = ["v4"] }
 
 # Fuzzy hashing: CTPH (Ssdeep-like) pure Rust + Imphash (PE/ELF import table)
 pelite = "0.6"
