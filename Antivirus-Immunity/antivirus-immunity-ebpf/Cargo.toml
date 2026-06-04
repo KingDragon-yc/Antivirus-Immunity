@@ -20,7 +20,7 @@ chrono = { version = "0.4", features = ["serde"] }
 nix = { version = "0.29", features = ["process", "signal", "user", "fs", "socket"] }
 libc = "0.2"
 sysinfo = "0.31"
-yara-x = "0.1"
+yara-x = "1.17"
 uuid = { version = "1.0", features = ["v4"] }
 
 # eBPF userspace library — CO-RE (Compile Once, Run Everywhere)

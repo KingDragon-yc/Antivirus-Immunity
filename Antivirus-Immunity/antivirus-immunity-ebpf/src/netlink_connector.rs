@@ -12,11 +12,10 @@
 #![cfg(target_os = "linux")]
 
 use crate::probe::{ProbeType, RawProbeEvent};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashSet;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::time::Duration;
 
 // ─── Netlink constants ───
 const NETLINK_CONNECTOR: i32 = 11;
@@ -68,7 +67,7 @@ struct CnMsg {
     id: CbId,
     seq: u32,
     ack: u32,
-    len: u16,   // Length of payload data
+    len: u16, // Length of payload data
     flags: u16,
 }
 
@@ -121,7 +120,7 @@ impl NetlinkConnector {
         let fd = unsafe { OwnedFd::from_raw_fd(sock) };
 
         // Bind to any port, subscribe to CN_IDX_PROC group
-        let mut addr = SockAddrNl {
+        let addr = SockAddrNl {
             nl_family: libc::AF_NETLINK as libc::sa_family_t,
             nl_pad: 0,
             nl_pid: 0,    // Kernel assigns a port
@@ -210,7 +209,8 @@ impl NetlinkConnector {
             );
             std::ptr::copy_nonoverlapping(
                 &payload as *const u32 as *const u8,
-                buf.as_mut_ptr().add(NLMSG_OVERHEAD + std::mem::size_of::<CnMsg>()),
+                buf.as_mut_ptr()
+                    .add(NLMSG_OVERHEAD + std::mem::size_of::<CnMsg>()),
                 std::mem::size_of::<u32>(),
             );
         }
@@ -296,9 +296,7 @@ impl NetlinkConnector {
             // Parse all nlmsghdr-delimited messages in the buffer
             let mut offset = 0usize;
             while offset + NLMSG_OVERHEAD <= received {
-                let hdr = unsafe {
-                    &*(buf.as_ptr().add(offset) as *const NlMsgHdr)
-                };
+                let hdr = unsafe { &*(buf.as_ptr().add(offset) as *const NlMsgHdr) };
                 let msg_len = hdr.nlmsg_len as usize;
                 if msg_len < NLMSG_OVERHEAD || offset + msg_len > received {
                     break;
@@ -309,9 +307,7 @@ impl NetlinkConnector {
                         // Parse cn_msg + proc_event
                         let cn_offset = offset + NLMSG_OVERHEAD;
                         if cn_offset + std::mem::size_of::<CnMsg>() <= received {
-                            let cn = unsafe {
-                                &*(buf.as_ptr().add(cn_offset) as *const CnMsg)
-                            };
+                            let cn = unsafe { &*(buf.as_ptr().add(cn_offset) as *const CnMsg) };
                             if cn.id.idx == CN_IDX_PROC && cn.id.val == CN_VAL_PROC {
                                 let data_offset = cn_offset + std::mem::size_of::<CnMsg>();
                                 let data_len = cn.len as usize;
@@ -428,7 +424,7 @@ impl NetlinkConnector {
                 if payload.len() < 16 {
                     return None;
                 }
-                let pid = u32::from_ne_bytes(payload[0..4].try_into().ok()?) as u32;
+                let pid = u32::from_ne_bytes(payload[0..4].try_into().ok()?);
                 let uid = u32::from_ne_bytes(payload[8..12].try_into().ok()?);
                 Some(RawProbeEvent {
                     pid,
@@ -444,7 +440,7 @@ impl NetlinkConnector {
                     ns_pid: pid,
                 })
             }
-            PROC_EVENT_NONE | _ => None,
+            _ => None,
         }
     }
 
@@ -476,11 +472,11 @@ impl NetlinkConnector {
     fn read_proc_cgroup_id(pid: u32) -> u64 {
         std::fs::read_to_string(format!("/proc/{}/cgroup", pid))
             .ok()
-            .and_then(|s| {
+            .map(|s| {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 s.hash(&mut hasher);
-                Some(hasher.finish())
+                hasher.finish()
             })
             .unwrap_or(0)
     }

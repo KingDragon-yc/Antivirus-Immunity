@@ -302,44 +302,48 @@ async fn main() -> anyhow::Result<()> {
                 antivirus_immunity_common::event::ResponseAction::BlockAccess => {
                     println!("    [!] ACCESS BLOCKED (eBPF LSM returned -EPERM)");
                 }
-                antivirus_immunity_common::event::ResponseAction::Monitor => {
+                antivirus_immunity_common::event::ResponseAction::Monitor
+                    if ai_cortex.is_available() && event.pid > 1 =>
+                {
                     // ── Async Deferred Blocking ──
                     // Suspicious process: suspend it, ask AI, then resume or kill.
-                    if ai_cortex.is_available() && event.pid > 1 {
-                        println!("    [🧠] Deferred blocking PID {}: SIGSTOP → AI analysis...", event.pid);
+                    println!(
+                        "    [🧠] Deferred blocking PID {}: SIGSTOP → AI analysis...",
+                        event.pid
+                    );
 
-                        // Step 1: Suspend the process immediately
-                        #[cfg(target_os = "linux")]
-                        {
-                            use nix::sys::signal::{kill, Signal};
-                            use nix::unistd::Pid;
-                            if let Err(e) = kill(Pid::from_raw(event.pid as i32), Signal::SIGSTOP) {
-                                eprintln!("    [!] SIGSTOP failed for PID {}: {}", event.pid, e);
-                            }
+                    // Step 1: Suspend the process immediately
+                    #[cfg(target_os = "linux")]
+                    {
+                        use nix::sys::signal::{kill, Signal};
+                        use nix::unistd::Pid;
+                        if let Err(e) = kill(Pid::from_raw(event.pid as i32), Signal::SIGSTOP) {
+                            eprintln!("    [!] SIGSTOP failed for PID {}: {}", event.pid, e);
                         }
+                    }
 
-                        // Step 2: Build AI context and spawn deferred evaluation
-                        let ctx = antivirus_immunity_common::ai_cortex::ProcessContext {
-                            pid: event.pid,
-                            name: event.comm.clone(),
-                            path: Some(event.path.clone()),
-                            hash: None,
-                            cmdline: None,
-                            container_id: container_id.clone(),
-                            parent_chain: parent_chain.clone(),
-                            network_activity: Vec::new(),
-                            file_access: Vec::new(),
-                            danger_level: format!("{:?}", verdict.severity),
-                            is_known_hash: false,
-                        };
+                    // Step 2: Build AI context and spawn deferred evaluation
+                    let ctx = antivirus_immunity_common::ai_cortex::ProcessContext {
+                        pid: event.pid,
+                        name: event.comm.clone(),
+                        path: Some(event.path.clone()),
+                        hash: None,
+                        cmdline: None,
+                        container_id: container_id.clone(),
+                        parent_chain: parent_chain.clone(),
+                        network_activity: Vec::new(),
+                        file_access: Vec::new(),
+                        danger_level: format!("{:?}", verdict.severity),
+                        is_known_hash: false,
+                    };
 
-                        let logger_clone = logger.clone();
-                        let ai_cortex = ai_cortex.clone();
-                        let pid = event.pid;
-                        let comm = event.comm.clone();
-                        let detail_clone = detail.clone();
+                    let logger_clone = logger.clone();
+                    let ai_cortex = ai_cortex.clone();
+                    let pid = event.pid;
+                    let comm = event.comm.clone();
+                    let detail_clone = detail.clone();
 
-                        deferred_tasks.push(tokio::spawn(async move {
+                    deferred_tasks.push(tokio::spawn(async move {
                             // Step 3: AI evaluation with 500ms hard timeout
                             let ai_result = tokio::time::timeout(
                                 std::time::Duration::from_millis(500),
@@ -429,7 +433,6 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                         }));
-                    }
                 }
                 _ => {} // Log — no action needed
             }
