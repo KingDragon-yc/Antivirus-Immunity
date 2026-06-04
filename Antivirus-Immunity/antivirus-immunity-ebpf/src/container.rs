@@ -66,7 +66,7 @@ impl ContainerContext {
 
         #[cfg(target_os = "linux")]
         {
-            self.parse_cgroup_container_id(pid)
+            return self.parse_cgroup_container_id(pid);
         }
 
         #[cfg(not(target_os = "linux"))]

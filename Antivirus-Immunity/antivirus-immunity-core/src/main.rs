@@ -333,13 +333,29 @@ async fn main() -> anyhow::Result<()> {
                                                 p.pid,
                                             ) {
                                                 Ok(entry) => {
-                                                    println!("ISOLATED (ID: {})", &entry.id[..8]);
+                                                    print!("ISOLATED ({}). ", &entry.id[..8]);
                                                     logger.log_action(
                                                         p.pid,
                                                         &p.name,
                                                         "QUARANTINE",
                                                         &format!("Isolated: {}", entry.id),
                                                     );
+                                                    // After rename-based isolation, kill the process.
+                                                    // The on-disk file is already moved; killing prevents
+                                                    // the malware from re-launching itself (nowhere to load from).
+                                                    print!("KILLING PROCESS... ");
+                                                    match CytotoxicTCell::induce_apoptosis(p.pid) {
+                                                        Ok(_) => {
+                                                            println!("TARGET ELIMINATED.");
+                                                            logger.log_action(
+                                                                p.pid,
+                                                                &p.name,
+                                                                "TERMINATE",
+                                                                "Post-quarantine elimination",
+                                                            );
+                                                        }
+                                                        Err(e) => println!("FAILED: {}", e),
+                                                    }
                                                 }
                                                 Err(e) => println!("FAILED: {}", e),
                                             }

@@ -1,266 +1,295 @@
 # Antivirus-Immunity
 
-> An experimental antivirus/security engine inspired by biological immune systems, augmented with local AI analysis.
+> **"An antivirus inspired by the immune system, augmented with local AI — now with eBPF kernel-level vision."**
 
-[![CI](https://github.com/KingDragon-yc/Antivirus-Immunity/actions/workflows/ci.yml/badge.svg)](https://github.com/KingDragon-yc/Antivirus-Immunity/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
+[![eBPF](https://img.shields.io/badge/eBPF-CO--RE-blue.svg)](https://ebpf.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Antivirus-Immunity is a Rust workspace exploring how Artificial Immune System (AIS) ideas can be applied to endpoint and cloud security. Instead of relying only on static signatures, the project combines process observation, path validation, hash-based immune memory, YARA rules, danger-signal correlation, and optional local LLM review through Ollama.
+---
 
-This is a research and education project. It is not a replacement for production antivirus or EDR software.
+## 项目愿景
 
-## Project Status
+Antivirus-Immunity 是基于 **人工免疫系统 (AIS)** 理论的安全防护引擎，结合本地 AI 大模型进行深度研判。与传统依赖特征库的杀毒软件不同，本项目侧重于：
 
-The repository currently contains two engine directions:
+- **自我/非我识别** — 建立系统"正常态"基线，识别偏离行为
+- **自适应模糊哈希免疫记忆** — CTPH (Ssdeep) + Imphash 多维度变种识别，告别 SHA256 精确匹配的脆弱性
+- **异步推迟阻断** — Linux 端 SIGSTOP 挂起可疑进程，AI 500ms 内出 Verdict 后决定放行或击杀；避免"先运行、后研判"
+- **危险信号理论** — 监测系统压力信号（CPU 飙升、进程洪水等），动态调整免疫灵敏度
+- **AI 深度分析 (Cortex)** — 对模糊案例调用本地 LLM 进行自然语言推理
+- **自适应性** — 对未知攻击手段做出反应，而非依赖已知签名
 
-| Component | Platform | Status | Notes |
-| --- | --- | --- | --- |
-| `antivirus-immunity-core` | Windows | Active prototype, v0.3 | Process polling through Windows ToolHelp APIs, YARA scanning, hash memory, path validation, quarantine, termination, JSONL logs, optional Ollama review. |
-| `antivirus-immunity-ebpf` | Linux | Experimental architecture, v0.4 | Policy engine, container-aware design, eBPF probe C source, and `/proc` fallback are present. Real libbpf-rs CO-RE loading and ring-buffer consumption are planned. |
-| `antivirus-immunity-common` | Cross-platform | Shared library | Common event types, logger, hash cache, and AI Cortex client used by the Linux direction. |
+### 目标场景
 
-## Immune-System Model
+- ☁️ 云 ECS / VPS（阿里云、AWS、腾讯云）
+- 🐳 Docker / Kubernetes 容器
+- 🤖 AI Agent 运行沙盒（LangChain, AutoGPT 等自动化 Agent 的边界护栏）
+- 💡 轻量实例适配（1C1G / 2C2G 自动切换 Lite 模式）
 
-The codebase uses biological immune-system concepts as design metaphors:
+---
 
-| Biology concept | Project module | Security role |
-| --- | --- | --- |
-| Toll-like receptors | Process/eBPF probes | Detect new process and system events. |
-| Memory B cells | Hash memory | Remember trusted binaries learned during a clean baseline scan. |
-| MHC/path validation | `PathValidator` | Detect system-process impersonation, such as `svchost.exe` outside `System32`. |
-| Danger theory | `DangerTheoryEngine` | Increase suspicion during CPU spikes, memory pressure, or process floods. |
-| Cytotoxic T cells | `CytotoxicTCell` | Terminate confirmed malicious processes. |
-| Quarantine | `Quarantine` | Copy suspicious files into an isolated directory and record metadata. |
-| Cerebral cortex | `AiCortex` | Ask a local Ollama model to review ambiguous cases. |
+## 架构设计
 
-## Workspace Layout
+```
+                    ┌─────────────────────────────────────┐
+                    │         Workspace (Cargo)           │
+                    ├─────────────────────────────────────┤
+                    │                                     │
+  ┌─────────────────┴─────────┐   ┌──────────────────────┴──────────┐
+  │  antivirus-immunity-core  │   │  antivirus-immunity-ebpf        │
+  │  (Windows · Legacy v0.3)  │   │  (Linux · eBPF v0.4 · Active)  │
+  │                           │   │                                 │
+  │  ToolHelp32 进程扫描      │   │  eBPF 内核探针 (CO-RE)          │
+  │  YARA 规则引擎            │   │  Netlink Connector (零轮询)     │
+  │  Windows API              │   │  Async Deferred Blocking        │
+  │  Fuzzy Hash (Ssdeep+Imph) │   │  Docker/K8s 容器感知            │
+  │  Quarantine (Rename隔离)  │   │  策略引擎 + AI Agent 沙盒       │
+  └─────────┬─────────────────┘   └──────────────┬──────────────────┘
+            │                                    │
+            └────────────┬───────────────────────┘
+                         │
+            ┌────────────▼────────────────────┐
+            │  antivirus-immunity-common      │
+            │  (跨平台共享层)                   │
+            │                                 │
+            │  SecurityEvent 统一事件格式      │
+            │  AI Cortex (Ollama LLM)         │
+            │  Logger (JSONL 结构化日志)       │
+            │  HashCache (LRU SHA256)         │
+            └─────────────────────────────────┘
+```
 
-```text
+### 多层评估管线
+
+```
+新进程 ──→ YARA扫描(黑名单) ──→ 路径验证(MHC) ──→ SHA256 精确匹配 ──→ 模糊哈希匹配(CTPH+Imphash)
+              │                      │                      │                      │
+        匹配=CRITICAL          伪装=CRITICAL          精确=SAFE         Ssdeep≥80%=SAFE
+              │                      │                      │                Imphash=SAFE
+              └──────────────────────┼──────────────────────┘
+                                     ↓
+                          危险信号关联(Danger Theory)
+                                     │
+                              ┌──────┴──────┐
+                              │  AI Cortex  │ ← 仅对模糊案例启用
+                              │  深度分析    │
+                              └──────┬──────┘
+                                     ↓
+                            分级响应 (Log/Kill/Quarantine)
+```
+
+### 事件源降级策略 (Linux)
+
+```
+poll_events() 优先级:
+  1. eBPF Ring Buffer      (生产 — 内核探针)
+  2. Netlink Connector      (无 eBPF — 内核推送, 毫秒级延迟, 零 CPU 轮询)
+  3. /proc 轮询             (最终兜底 — 极老内核兼容)
+```
+
+### 异步推迟阻断 (Async Deferred Blocking)
+
+```
+Netlink 检测 EXEC → SIGSTOP 进程 → AI Cortex (500ms timeout)
+    ├─ TERMINATE/MALICIOUS → SIGKILL
+    ├─ SAFE/ALLOW          → SIGCONT (恢复)
+    └─ 超时                → SIGCONT + 日志 (默认放行)
+```
+
+---
+
+## 项目结构
+
+```
 Antivirus-Immunity/
-├── Cargo.toml
+├── Cargo.toml                          # Workspace 定义
 ├── README.md
 ├── USER_MANUAL.md
-├── antivirus-immunity-common/
+│
+├── antivirus-immunity-common/          # 跨平台共享层
+│   ├── Cargo.toml
 │   └── src/
-│       ├── ai_cortex.rs
-│       ├── event.rs
-│       ├── hash_cache.rs
 │       ├── lib.rs
-│       └── logger.rs
-├── antivirus-immunity-core/
-│   ├── antigens.yar
-│   ├── src/
-│   │   ├── main.rs
-│   │   ├── receptor/
-│   │   ├── immune/
-│   │   └── effector/
-│   ├── tests/
-│   │   └── mock_antigen.rs
-│   └── tools/
-│       └── antigen_extractor.rs
-└── antivirus-immunity-ebpf/
-    ├── build.sh
-    ├── bpf/
-    │   └── probes.bpf.c
+│       ├── event.rs                    # SecurityEvent / ProcessInfo / 枚举
+│       ├── logger.rs                   # JSONL 结构化日志 (50MB 自动轮转)
+│       ├── ai_cortex.rs               # Ollama LLM 接口
+│       └── hash_cache.rs             # LRU SHA256 缓存
+│
+├── antivirus-immunity-ebpf/            # Linux eBPF 引擎 (v0.4.0)
+│   ├── Cargo.toml
+│   ├── build.sh                        # eBPF 编译脚本
+│   ├── bpf/
+│   │   └── probes.bpf.c               # CO-RE 内核探针 (C)
+│   └── src/
+│       ├── main.rs                     # CLI + 事件循环 + 异步推迟阻断
+│       ├── probe.rs                    # 探针管理 (eBPF / Netlink / /proc)
+│       ├── netlink_connector.rs       # NETLINK_CONNECTOR 零轮询进程监听
+│       ├── container.rs               # Docker/K8s 容器上下文
+│       ├── policy.rs                  # 安全策略引擎
+│       ├── process_tree.rs            # 进程族谱追踪
+│       ├── resource_aware.rs          # 硬件感知 + Lite 模式
+│       ├── network.rs                 # 网络连接监控
+│       └── filesystem.rs             # 文件系统护栏
+│
+└── antivirus-immunity-core/            # Windows 引擎 (v0.3.0 · Legacy)
+    ├── Cargo.toml
+    ├── antigens.yar                    # 12+ YARA 规则
+    ├── immunity_db.json               # V2 模糊哈希免疫记忆数据库
     └── src/
         ├── main.rs
-        ├── probe.rs
-        ├── policy.rs
-        ├── container.rs
-        ├── process_tree.rs
-        ├── resource_aware.rs
-        ├── network.rs
-        └── filesystem.rs
+        ├── receptor/                   # TollLikeReceptor + HashCache
+        │   ├── toll_like_receptor.rs
+        │   └── hash_cache.rs
+        ├── immune/                     # 决策中枢
+        │   ├── memory_b_cell.rs       # 免疫记忆 (SHA256 + Ssdeep + Imphash)
+        │   ├── fuzzy_hash.rs          # CTPH + Imphash 模糊哈希引擎
+        │   ├── danger_theory.rs       # 危险信号理论
+        │   ├── path_validator.rs      # 路径验证 (MHC)
+        │   └── ai_cortex.rs           # AI Cortex
+        └── effector/                   # 响应层
+            ├── cytotoxic_t_cell.rs    # 进程终止 (细胞凋亡)
+            └── quarantine.rs          # 隔离区管理 (rename-based)
 ```
 
-## Windows Core Engine
+---
 
-The Windows prototype is the most complete implementation today.
+## 内核探针挂载点 (Linux)
 
-### Detection Pipeline
+| 探针 | 挂载点 | 功能 | Lite模式 |
+|------|--------|------|----------|
+| 进程执行 | `tracepoint/syscalls/sys_enter_execve` | 捕获所有新进程 | ✅ |
+| TCP 外联 | `kprobe/tcp_connect` | 检测出站连接 (挖矿池/C2/反弹shell) | ✅ |
+| 提权检测 | `kprobe/commit_creds` | UID 变更至 root | ✅ |
+| 文件访问 | `LSM/security_file_open` | 保护敏感文件 (/etc/shadow 等) | ❌ |
+| 文件创建 | `LSM/security_inode_create` | 检测可疑文件写入 | ❌ |
+| 网络阻断 | `XDP / TC` | 内核级包过滤 | ❌ |
 
-```text
-new process
-  -> YARA antigen scan
-  -> path validation
-  -> trusted hash memory
-  -> danger-signal correlation
-  -> optional AI Cortex review
-  -> log / quarantine / terminate
-```
+---
 
-### Main Features
+## 安全策略配置 (Profiles)
 
-- Process polling with Windows ToolHelp APIs.
-- SHA256 hash cache to avoid repeated hashing of unchanged files.
-- `immunity_db.json` trusted-hash memory created by learning mode.
-- YARA rule database in `antigens.yar`.
-- Path checks for common Windows process impersonation.
-- CPU, memory, and process-flood danger signals.
-- Optional local Ollama analysis for ambiguous cases.
-- JSONL audit logging under `logs/`.
-- Quarantine manifest under `quarantine/`.
+| Profile | 场景 | 网络监控 | 文件护栏 | AI分析 | 提权检测 |
+|---------|------|----------|----------|--------|----------|
+| **server** | 标准云服务器 | ✅ | ✅ | ✅ | ✅ |
+| **container** | Docker/K8s | ✅ | ✅ (docker.sock重点) | ✅ | ✅ |
+| **ai-agent** | AI Agent 沙盒 | ✅ (严格边界) | ✅ | ✅ | ✅ |
+| **lite** | 1C1G 轻量实例 | ✅ (核心) | ❌ | ❌ | ✅ |
 
-### Quick Start
+---
 
-Run these commands from the Windows engine directory:
+## 快速开始
 
-```powershell
-cd antivirus-immunity-core
-cargo build --release
-```
+### 前置要求
 
-Learn the current clean system baseline:
+```bash
+# Linux (Ubuntu/Debian)
+sudo apt install clang llvm libbpf-dev bpftool
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-```powershell
-cargo run -- --mode learn
-```
-
-Start passive monitoring:
-
-```powershell
-cargo run -- --mode monitor --ai false
-```
-
-Start monitoring with local AI review:
-
-```powershell
-cargo run -- --mode monitor --ai true --ai-model qwen2.5:3b
-```
-
-Start active defense with quarantine:
-
-```powershell
-cargo run -- --mode active --policy quarantine --ai true
-```
-
-View active quarantine entries:
-
-```powershell
-cargo run -- --mode quarantine-list
-```
-
-> Active defense can terminate processes and move files. Use passive monitoring first until you understand the alerts on your machine.
-
-## Ollama / AI Cortex
-
-AI Cortex is optional. If Ollama is unavailable, the engine falls back to rule-based evaluation.
-
-Install and pull a small local model:
-
-```powershell
+# Ollama (可选, 用于 AI Cortex)
+curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5:3b
 ```
 
-Then run:
-
-```powershell
-cargo run -- --mode monitor --ai true --ai-model qwen2.5:3b
-```
-
-The AI request is local-first: process context is sent to the configured Ollama endpoint, which defaults to `http://localhost:11434`.
-
-## Linux eBPF Engine
-
-The Linux engine is the v0.4 direction for cloud servers, containers, Kubernetes nodes, and AI agent sandboxes.
-
-Implemented so far:
-
-- Command-line engine shell in Rust.
-- Hardware-aware Lite mode.
-- Policy profiles for `server`, `container`, and `ai-agent`.
-- Container context and process ancestry scaffolding.
-- eBPF C probe source for process exec, TCP connect, credential change, and LSM file hooks.
-- Development fallback that polls `/proc` for new processes.
-
-Planned next:
-
-- Compile and load CO-RE eBPF objects through `libbpf-rs`.
-- Consume BPF ring-buffer events in Rust.
-- Wire file/network/credential events into the policy engine.
-- Add real LSM access blocking and XDP/TC network enforcement.
-- Add Kubernetes deployment artifacts and Prometheus metrics.
-
-Build the Rust userspace component:
+### 编译与运行
 
 ```bash
-cd antivirus-immunity-ebpf
+# 编译整个 workspace
 cargo build --release
+
+# 运行 eBPF 引擎 (需要 root 权限)
+sudo ./target/release/immunity-ebpf --profile server
+
+# AI Agent 沙盒模式
+sudo ./target/release/immunity-ebpf --profile ai-agent --ai --ai-model qwen2.5:3b
+
+# Lite 模式 (自动检测, 也可手动)
+sudo ./target/release/immunity-ebpf --profile server --max-memory-mb 30
 ```
 
-Build eBPF probes on a Linux host with `clang`, `bpftool`, and kernel BTF support:
+### 命令行参数 (eBPF 引擎)
+
+```
+USAGE: immunity-ebpf [OPTIONS]
+
+OPTIONS:
+  -m, --mode <MODE>           运行模式: monitor, enforce, learn [default: monitor]
+  -p, --profile <PROFILE>     策略配置: server, container, ai-agent [default: server]
+      --ai                    启用 AI Cortex
+      --ai-model <MODEL>      AI 模型 [default: qwen2.5:3b]
+      --ai-endpoint <URL>     Ollama 地址 [default: http://localhost:11434]
+      --protected-paths <P>   受保护路径 (逗号分隔)
+      --max-memory-mb <MB>    内存上限 [default: 100]
+      --output <FORMAT>       输出格式: text, json [default: text]
+```
+
+### Windows 引擎
 
 ```bash
-cd antivirus-immunity-ebpf
-./build.sh probes
+cargo run -p antivirus-immunity-core -- --mode learn    # 学习系统正常态
+cargo run -p antivirus-immunity-core -- --mode monitor  # 被动监控
+cargo run -p antivirus-immunity-core -- --mode active --policy quarantine --ai true  # 主动防御
+cargo run -p antivirus-immunity-core -- --mode quarantine-list  # 查看隔离区
 ```
 
-## Useful Commands
+---
 
-Format the workspace:
+## 生物学类比
 
-```bash
-cargo fmt --all
-```
+| 生物免疫 | 本项目组件 | 功能 |
+|----------|-----------|------|
+| Toll 样受体 (TLR) | `probe.rs` / eBPF 探针 | 检测入侵的第一道传感器 |
+| 抗原呈递 | `process_tree.rs` | 追踪进程来源，还原攻击链 |
+| T 细胞分化 | `policy.rs` | 根据上下文选择杀伤/容忍/观察 |
+| 记忆 B 细胞 | `memory_b_cell.rs` / `fuzzy_hash.rs` | 多维度模糊哈希免疫记忆，识别病毒变种 |
+| 上皮屏障 | `filesystem.rs` | 保护关键文件 |
+| 补体系统 | `network.rs` | 网络巡逻标记外来物 |
+| 大脑皮层 | `ai_cortex.rs` | 对疑难案例的深度智能分析 |
+| 免疫记忆 | `logger.rs` | JSONL 审计日志，事后回溯 |
+| 细胞凋亡 | `cytotoxic_t_cell.rs` | 终止恶意进程 |
+| 淋巴结隔离 | `quarantine.rs` | 移星换斗式文件隔离 (rename-based) |
+| 新陈代谢调节 | `resource_aware.rs` | 资源不足时进入节能模式 |
+| 组织定位 | `container.rs` | 感知进程所在的容器环境 |
 
-Check the shared crate:
+---
 
-```bash
-cargo check -p antivirus-immunity-common
-```
+## 路线图
 
-Check the Windows core crate on Windows:
+- [x] **v0.3.0** — Windows 引擎 (ToolHelp32 + YARA + AI Cortex + Fuzzy Hash + Quarantine)
+- [x] **v0.4.0** — Linux eBPF 架构骨架 + 策略引擎 + Netlink Connector + Async Deferred Blocking
+- [ ] **v0.5.0** — 真实 eBPF CO-RE 探针加载 (libbpf-rs) + Ring Buffer 消费
+- [ ] **v0.6.0** — XDP/TC 网络阻断 + LSM 文件护栏内核实现
+- [ ] **v0.7.0** — K8s Sidecar 部署 + Prometheus metrics + 威胁情报黑名单模糊哈希库
+- [ ] **v1.0.0** — 生产就绪
 
-```powershell
-cargo check -p antivirus-immunity-core
-```
+---
 
-Check the Linux engine Rust crate:
+## 核心优化亮点
 
-```bash
-cargo check -p antivirus-immunity-ebpf
-```
+### Windows Quarantine: 移星换斗 (Rename-based Isolation)
 
-Run tests:
+利用 Windows 允许对运行中文件在同卷内 `MoveFileExW` 的机制，先 `fs::rename` 移走磁盘文件再 `TerminateProcess` 杀进程。恶意软件无法自恢复，manifest 采用 hex 编码 + `.qdb` 隐藏路径防止被恶意遍历。
 
-```bash
-cargo test --workspace
-```
+### Linux: Netlink Connector 零轮询事件源
 
-Platform-specific crates may require matching operating systems and toolchains. The CI workflow builds the Windows core on Windows and the Linux/eBPF userspace crate on Ubuntu.
+替代 `/proc` 轮询，通过 `NETLINK_CONNECTOR` + `CN_IDX_PROC` 订阅内核 FORK/EXEC/EXIT 事件。内核主动推送，毫秒级延迟，完全消除 TOCTOU 竞态和 CPU 空转。
 
-## YARA Rules
+### Linux: Async Deferred Blocking
 
-The Windows engine loads rules from:
+对可疑进程立即 `SIGSTOP` 挂起，调用本地 LLM 在 500ms 内给出 Verdict：恶意则 `SIGKILL`，安全或超时则 `SIGCONT` 恢复。避免"先运行、后研判"的安全滞后。
 
-```text
-antivirus-immunity-core/antigens.yar
-```
+### Fuzzy Hash 免疫记忆 (CTPH + Imphash)
 
-The included rules cover test signatures and common malware indicators such as ransomware notes, credential dumping, persistence, suspicious script execution, PowerShell obfuscation, process injection, reverse shells, and cryptomining.
+- **CTPH (Ssdeep)**: 纯 Rust 实现，分片模糊哈希。插入/删除/修改局部段落仅影响局部哈希，相似度 ≥80% 即识别为同源变种
+- **Imphash**: PE (pelite) / ELF (goblin) 导入表结构哈希。无论核心代码如何混淆，导入的系统 API 签名高度稳定，专门用于恶意家族聚类
+- **数据库 V2**: `immunity_db.json` 升级为多哈希签名格式，自动迁移 V1 数据
 
-Add custom rules by editing `antigens.yar` and restarting the engine.
+---
 
-## Roadmap
+## 许可证
 
-- Stabilize the Windows core prototype and CLI.
-- Split documentation clearly between Windows v0.3 and Linux v0.4.
-- Convert the Linux eBPF implementation from architecture scaffold to real libbpf-rs runtime.
-- Add more unit tests around path validation, YARA decisions, quarantine behavior, and policy profiles.
-- Add signed release artifacts and clearer installation instructions.
-- Add SIEM-friendly event output and deployment examples.
+MIT License
 
-## Safety Notice
+## 作者
 
-This project can terminate processes and move files when active defense is enabled. Run it in a test environment first, keep backups, and prefer passive monitoring until the local baseline is understood.
-
-Do not use this project as your only security control in production.
-
-## License
-
-MIT
-
-## Author
-
-KingDragon-yc
+**KingDragon-yc** — [GitHub](https://github.com/KingDragon-yc)

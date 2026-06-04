@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 const QUARANTINE_DIR: &str = "quarantine";
-const QUARANTINE_DB: &str = "quarantine/manifest.json";
+const QUARANTINE_DB: &str = "quarantine/.qdb";
 
 /// Metadata for a quarantined item
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +79,15 @@ impl Quarantine {
         Ok(Self { dir, entries })
     }
 
-    /// Quarantine a file: move it to the quarantine directory
+    /// Quarantine a file: move it to the quarantine directory.
+    ///
+    /// Uses `fs::rename` (MoveFileExW on Windows) as primary strategy.
+    /// Windows allows renaming/moving a running executable within the same volume,
+    /// even when delete is blocked by mandatory file locking. This is the
+    /// "移星换斗" (swap stars for a fighting post) technique:
+    /// move the file before killing the process, so the malware cannot re-launch itself.
+    ///
+    /// Falls back to copy+delete if rename fails (e.g. cross-volume move).
     pub fn isolate(
         &mut self,
         file_path: &str,
@@ -104,16 +112,31 @@ impl Quarantine {
         let quarantine_filename = format!("{}.{}.quarantine", id, extension);
         let quarantine_path = self.dir.join(&quarantine_filename);
 
-        // Move file to quarantine
-        fs::copy(source, &quarantine_path)
-            .with_context(|| format!("Failed to copy {} to quarantine", file_path))?;
+        // Step 1: Attempt atomic rename (MoveFileExW on Windows).
+        // On the same volume, this succeeds even if the file is locked by a running process.
+        match fs::rename(source, &quarantine_path) {
+            Ok(_) => {
+                // File successfully moved — original location is now empty.
+                // The running process still holds a handle in memory, but the
+                // on-disk file is gone. Malware cannot re-launch itself.
+            }
+            Err(rename_err) => {
+                // Rename may fail for cross-volume moves or permission issues.
+                // Fall back to copy + best-effort delete.
+                fs::copy(source, &quarantine_path).with_context(|| {
+                    format!(
+                        "Failed to copy {} to quarantine (rename also failed: {})",
+                        file_path, rename_err
+                    )
+                })?;
 
-        // Remove original (best effort — may fail due to file locks)
-        if let Err(e) = fs::remove_file(source) {
-            eprintln!(
-                "    [!] Warning: Could not remove original file (may be locked): {}",
-                e
-            );
+                if let Err(e) = fs::remove_file(source) {
+                    eprintln!(
+                        "    [!] Warning: Could not remove original file (may be locked): {}",
+                        e
+                    );
+                }
+            }
         }
 
         let entry = QuarantineEntry {
@@ -151,12 +174,22 @@ impl Quarantine {
         let original = Path::new(&entry.original_path);
 
         if qpath.exists() {
-            // Ensure parent directory exists
             if let Some(parent) = original.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(qpath, original)?;
-            fs::remove_file(qpath)?;
+            // Attempt rename first (same-volume, atomic)
+            match fs::rename(qpath, original) {
+                Ok(_) => {}
+                Err(rename_err) => {
+                    fs::copy(qpath, original).with_context(|| {
+                        format!(
+                            "Failed to copy {} back to {} (rename also failed: {})",
+                            entry.quarantine_path, entry.original_path, rename_err
+                        )
+                    })?;
+                    fs::remove_file(qpath)?;
+                }
+            }
         }
 
         entry.status = QuarantineStatus::Released;
@@ -196,8 +229,12 @@ impl Quarantine {
     }
 
     fn load_manifest() -> Result<Vec<QuarantineEntry>> {
-        let data = fs::read_to_string(QUARANTINE_DB)?;
-        let manifest: QuarantineManifest = serde_json::from_str(&data)?;
+        let encoded = fs::read_to_string(QUARANTINE_DB)?;
+        let data = hex::decode(encoded.trim())
+            .map_err(|e| anyhow::anyhow!("Failed to decode quarantine manifest: {}", e))?;
+        let json = String::from_utf8(data)
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in quarantine manifest: {}", e))?;
+        let manifest: QuarantineManifest = serde_json::from_str(&json)?;
         Ok(manifest.entries)
     }
 
@@ -206,7 +243,8 @@ impl Quarantine {
             entries: self.entries.clone(),
         };
         let data = serde_json::to_string_pretty(&manifest)?;
-        fs::write(QUARANTINE_DB, data)?;
+        let encoded = hex::encode(data.as_bytes());
+        fs::write(QUARANTINE_DB, encoded)?;
         Ok(())
     }
 }

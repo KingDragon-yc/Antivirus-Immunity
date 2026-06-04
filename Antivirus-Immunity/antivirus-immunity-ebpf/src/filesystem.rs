@@ -225,8 +225,12 @@ impl FilesystemGuard {
             // 拒绝
             self.denied_count += 1;
             let decision = AccessDecision::Deny(format!(
-                "BLOCKED: {:?} on '{}' by '{}' (pid:{}) — {}",
-                operation, path, comm, pid, rule.description
+                "BLOCKED: {} on '{}' by '{}' (pid:{}) — {}",
+                format!("{:?}", operation),
+                path,
+                comm,
+                pid,
+                rule.description
             ));
             self.record_audit(path, operation, pid, comm, &decision);
             return decision;

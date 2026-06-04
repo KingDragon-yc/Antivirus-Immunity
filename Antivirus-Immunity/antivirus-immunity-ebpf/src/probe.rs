@@ -7,8 +7,13 @@
 //! 2. Attach 到内核挂载点 (tracepoints, kprobes, LSM hooks)
 //! 3. 通过 BPF Ring Buffer 接收内核事件
 //!
-//! 在开发/回退模式下，通过 /proc 轮询模拟事件流。
+//! Fallback 优先级（自动降级）:
+//!   1. eBPF Ring Buffer (生产模式)
+//!   2. Netlink Connector (无 eBPF，内核推送，零轮询，毫秒级延迟)
+//!   3. /proc 轮询 (最终兜底，兼容非常老的内核)
 
+#[cfg(target_os = "linux")]
+use crate::netlink_connector::NetlinkConnector;
 use anyhow::Result;
 use std::collections::HashSet;
 
@@ -41,6 +46,10 @@ pub enum ProbeType {
 pub struct ProbeManager {
     lite_mode: bool,
     known_pids: HashSet<u32>,
+    /// Netlink Connector socket — preferred fallback for non-eBPF systems.
+    /// If None, falls through to /proc polling.
+    #[cfg(target_os = "linux")]
+    netlink: Option<NetlinkConnector>,
     // In production: BPF object handles, ring buffer consumer, maps
     // bpf_obj: Option<libbpf_rs::Object>,
     // ring_buf: Option<libbpf_rs::RingBuffer>,
@@ -65,17 +74,56 @@ impl ProbeManager {
         //        .add(obj.map("events")?, callback)?
         //        .build()?;
 
+        // Try to initialize Netlink Connector for zero-polling process events
+        #[cfg(target_os = "linux")]
+        let netlink = NetlinkConnector::new().ok();
+        #[cfg(not(target_os = "linux"))]
+        let _netlink: Option<()> = None;
+
+        #[cfg(target_os = "linux")]
+        {
+            if netlink.is_some() {
+                println!("[+] ProbeManager: Netlink Connector initialized (zero-polling process events)");
+            } else {
+                println!("[!] ProbeManager: Netlink Connector unavailable, falling back to /proc polling");
+            }
+        }
+
         Ok(Self {
             lite_mode,
             known_pids: HashSet::new(),
+            #[cfg(target_os = "linux")]
+            netlink,
         })
     }
 
     /// Poll for new events.
-    /// In production: ring_buf.poll(timeout)
-    /// In dev mode: /proc-based polling
+    /// Priority: eBPF Ring Buffer → Netlink Connector → /proc polling
     pub fn poll_events(&mut self) -> Result<Vec<RawProbeEvent>> {
-        // Development fallback: read from /proc
+        // In production: ring_buf.poll(timeout)
+        // For now: try Netlink first, fall back to /proc
+
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(ref mut nl) = self.netlink {
+                match nl.recv_events() {
+                    Ok(events) if !events.is_empty() => {
+                        return Ok(events);
+                    }
+                    Ok(_) => {
+                        // Netlink returned empty (timeout) — return empty, don't fall back
+                        return Ok(Vec::new());
+                    }
+                    Err(e) => {
+                        eprintln!("    [!] Netlink error: {}. Falling back to /proc.", e);
+                        // Netlink broke — disable it and fall through
+                        self.netlink = None;
+                    }
+                }
+            }
+        }
+
+        // Final fallback: /proc-based polling (legacy, TOCTOU-prone)
         self.poll_proc_fallback()
     }
 
@@ -161,12 +209,12 @@ impl ProbeManager {
         // Read cgroup path to derive container ID
         std::fs::read_to_string(format!("/proc/{}/cgroup", pid))
             .ok()
-            .map(|s| {
+            .and_then(|s| {
                 // Hash the cgroup path as a rough ID
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 s.hash(&mut hasher);
-                hasher.finish()
+                Some(hasher.finish())
             })
             .unwrap_or(0)
     }
