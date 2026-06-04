@@ -1,5 +1,6 @@
 pub mod ai_cortex;
 pub mod danger_theory;
+pub mod fuzzy_hash;
 pub mod memory_b_cell;
 pub mod path_validator;
 

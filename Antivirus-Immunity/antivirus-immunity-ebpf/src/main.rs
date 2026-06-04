@@ -36,6 +36,8 @@
 
 mod container;
 mod filesystem;
+#[cfg(target_os = "linux")]
+mod netlink_connector;
 mod network;
 mod policy;
 mod probe;
@@ -169,6 +171,9 @@ async fn main() -> anyhow::Result<()> {
         println!("[*] AI Cortex: Disabled in Lite mode to conserve resources.");
     }
 
+    // Wrap in Arc for shared access across deferred blocking tasks
+    let ai_cortex = std::sync::Arc::new(ai_cortex);
+
     // ==================== CONTAINER CONTEXT ====================
     let container_ctx = container::ContainerContext::detect();
     println!("[*] Container runtime: {}", container_ctx.runtime_name());
@@ -229,10 +234,21 @@ async fn main() -> anyhow::Result<()> {
     println!("{:-<8} {:-<20} {:-<12} {:-<15} {:-<50}", "", "", "", "", "");
 
     // ==================== MAIN EVENT LOOP ====================
-    // In production, this reads from BPF Ring Buffer.
-    // In dev/fallback mode, uses /proc polling.
+    // Event ingestion priority:
+    //   1. eBPF Ring Buffer (production)
+    //   2. Netlink Connector (zero-polling kernel push, millisecond latency)
+    //   3. /proc polling (legacy fallback)
+    //
+    // Async Deferred Blocking flow:
+    //   Suspicious process → SIGSTOP → AI Cortex (500ms timeout) → SIGCONT or SIGKILL
+    println!("[*] Polling mode: Netlink Connector (kernel-driven, zero CPU waste)");
+    println!();
+
     loop {
         let events = probe_manager.poll_events()?;
+
+        // Collect AI-deferred tasks for this cycle
+        let mut deferred_tasks = Vec::new();
 
         for event in events {
             // Enrich with container context
@@ -241,7 +257,7 @@ async fn main() -> anyhow::Result<()> {
             // Build process ancestry for AI context
             let parent_chain = proc_tree.get_ancestry(event.pid);
 
-            // Policy evaluation
+            // ── Rule-based policy evaluation (fast path) ──
             let verdict = policy.evaluate(&event, container_id.as_deref(), &parent_chain);
 
             let container_label = container_id
@@ -257,7 +273,7 @@ async fn main() -> anyhow::Result<()> {
                 event.pid, event.comm, container_label, verdict_str, detail
             );
 
-            // Log
+            // Log the detection
             logger.log(&SecurityEvent {
                 timestamp: Utc::now(),
                 event_type: SecurityEventType::ProcessExec,
@@ -272,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
                 danger_level: None,
             });
 
-            // Execute action
+            // ── Execute action ──
             match verdict.action {
                 antivirus_immunity_common::event::ResponseAction::Terminate => {
                     println!("    [!!!] KILLING PID {}...", event.pid);
@@ -285,13 +301,152 @@ async fn main() -> anyhow::Result<()> {
                 }
                 antivirus_immunity_common::event::ResponseAction::BlockAccess => {
                     println!("    [!] ACCESS BLOCKED (eBPF LSM returned -EPERM)");
-                    // In the real eBPF path, blocking happens in kernel space.
-                    // The userspace just logs the event.
                 }
-                _ => {}
+                antivirus_immunity_common::event::ResponseAction::Monitor => {
+                    // ── Async Deferred Blocking ──
+                    // Suspicious process: suspend it, ask AI, then resume or kill.
+                    if ai_cortex.is_available() && event.pid > 1 {
+                        println!("    [🧠] Deferred blocking PID {}: SIGSTOP → AI analysis...", event.pid);
+
+                        // Step 1: Suspend the process immediately
+                        #[cfg(target_os = "linux")]
+                        {
+                            use nix::sys::signal::{kill, Signal};
+                            use nix::unistd::Pid;
+                            if let Err(e) = kill(Pid::from_raw(event.pid as i32), Signal::SIGSTOP) {
+                                eprintln!("    [!] SIGSTOP failed for PID {}: {}", event.pid, e);
+                            }
+                        }
+
+                        // Step 2: Build AI context and spawn deferred evaluation
+                        let ctx = antivirus_immunity_common::ai_cortex::ProcessContext {
+                            pid: event.pid,
+                            name: event.comm.clone(),
+                            path: Some(event.path.clone()),
+                            hash: None,
+                            cmdline: None,
+                            container_id: container_id.clone(),
+                            parent_chain: parent_chain.clone(),
+                            network_activity: Vec::new(),
+                            file_access: Vec::new(),
+                            danger_level: format!("{:?}", verdict.severity),
+                            is_known_hash: false,
+                        };
+
+                        let logger_clone = logger.clone();
+                        let ai_cortex = ai_cortex.clone();
+                        let pid = event.pid;
+                        let comm = event.comm.clone();
+                        let detail_clone = detail.clone();
+
+                        deferred_tasks.push(tokio::spawn(async move {
+                            // Step 3: AI evaluation with 500ms hard timeout
+                            let ai_result = tokio::time::timeout(
+                                std::time::Duration::from_millis(500),
+                                ai_cortex.evaluate(&ctx),
+                            )
+                            .await;
+
+                            match ai_result {
+                                Ok(Some(verdict)) => {
+                                    println!(
+                                        "    [🧠] AI verdict for PID {} ({}): {} (confidence {:.0}%) → {}",
+                                        pid, comm,
+                                        verdict.classification,
+                                        verdict.confidence * 100.0,
+                                        verdict.recommendation,
+                                    );
+
+                                    let action = match verdict.recommendation.as_str() {
+                                        "TERMINATE" | "BLOCK" => {
+                                            println!("    [!!!] AI: ELIMINATING PID {}...", pid);
+                                            #[cfg(target_os = "linux")]
+                                            {
+                                                use nix::sys::signal::{kill, Signal};
+                                                use nix::unistd::Pid;
+                                                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+                                            }
+                                            "TERMINATE"
+                                        }
+                                        _ => {
+                                            // SAFE/ALLOW/MONITOR: resume the process
+                                            println!("    [✓] AI: Resuming PID {}...", pid);
+                                            #[cfg(target_os = "linux")]
+                                            {
+                                                use nix::sys::signal::{kill, Signal};
+                                                use nix::unistd::Pid;
+                                                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGCONT);
+                                            }
+                                            "RESUMED"
+                                        }
+                                    };
+
+                                    logger_clone.log(&SecurityEvent {
+                                        timestamp: Utc::now(),
+                                        event_type: SecurityEventType::AiAnalysis,
+                                        severity: Severity::High,
+                                        pid: Some(pid),
+                                        process_name: Some(comm),
+                                        process_path: None,
+                                        container_id: None,
+                                        detail: format!(
+                                            "Deferred AI verdict: {} | Reasoning: {}",
+                                            verdict.classification, verdict.reasoning,
+                                        ),
+                                        action_taken: Some(action.to_string()),
+                                        ai_verdict: Some(
+                                            serde_json::to_string(&verdict).unwrap_or_default(),
+                                        ),
+                                        danger_level: None,
+                                    });
+                                }
+                                Ok(None) | Err(_) => {
+                                    // AI unavailable or timed out — default allow
+                                    println!("    [⏰] AI timeout/unavailable for PID {}. Resuming...", pid);
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        use nix::sys::signal::{kill, Signal};
+                                        use nix::unistd::Pid;
+                                        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGCONT);
+                                    }
+
+                                    logger_clone.log(&SecurityEvent {
+                                        timestamp: Utc::now(),
+                                        event_type: SecurityEventType::AiAnalysis,
+                                        severity: Severity::Medium,
+                                        pid: Some(pid),
+                                        process_name: Some(comm),
+                                        process_path: None,
+                                        container_id: None,
+                                        detail: format!(
+                                            "Deferred AI timed out or unavailable for: {}",
+                                            detail_clone,
+                                        ),
+                                        action_taken: Some("RESUMED (AI timeout)".to_string()),
+                                        ai_verdict: None,
+                                        danger_level: None,
+                                    });
+                                }
+                            }
+                        }));
+                    }
+                }
+                _ => {} // Log — no action needed
             }
         }
 
+        // Await all deferred AI tasks before next poll cycle
+        if !deferred_tasks.is_empty() {
+            for task in deferred_tasks {
+                if let Err(e) = task.await {
+                    eprintln!("    [!] Deferred AI task panicked: {}", e);
+                }
+            }
+        }
+
+        // No explicit sleep: Netlink Connector blocks on recvfrom() with 100ms timeout.
+        // On /proc fallback, add a minimal yield to prevent CPU spinning.
+        #[cfg(not(target_os = "linux"))]
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 }

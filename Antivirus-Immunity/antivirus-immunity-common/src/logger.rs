@@ -14,6 +14,7 @@ use std::path::PathBuf;
 const LOG_DIR: &str = "logs";
 const MAX_LOG_SIZE: u64 = 50 * 1024 * 1024; // 50MB
 
+#[derive(Clone)]
 pub struct Logger {
     log_dir: PathBuf,
     current_log: PathBuf,
