@@ -198,7 +198,7 @@ impl DangerTheoryEngine {
         while self
             .recent_process_events
             .front()
-            .map_or(false, |t| *t < window_start)
+            .is_some_and(|t| *t < window_start)
         {
             self.recent_process_events.pop_front();
         }
@@ -264,10 +264,8 @@ impl DangerTheoryEngine {
             match s.level {
                 DangerLevel::Critical => return DangerLevel::Critical,
                 DangerLevel::High => max_level = DangerLevel::High,
-                DangerLevel::Elevated => {
-                    if max_level == DangerLevel::Normal {
-                        max_level = DangerLevel::Elevated;
-                    }
+                DangerLevel::Elevated if max_level == DangerLevel::Normal => {
+                    max_level = DangerLevel::Elevated;
                 }
                 _ => {}
             }

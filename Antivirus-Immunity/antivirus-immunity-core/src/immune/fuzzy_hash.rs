@@ -37,10 +37,17 @@ pub struct FuzzySignature {
     pub ssdeep: Option<String>,
     pub imphash: Option<String>,
     pub file_type: FileType,
+    /// File size in bytes; not currently consumed by the matching pipeline
+    /// but kept on the signature for future heuristics and for callers that
+    /// log it.
+    #[allow(dead_code)]
     pub file_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+// PE / ELF are conventional file-format acronyms; keep them uppercase
+// rather than the clippy-preferred `Pe` / `Elf`.
+#[allow(clippy::upper_case_acronyms)]
 pub enum FileType {
     PE,
     ELF,
@@ -59,6 +66,10 @@ impl FileType {
 
 #[derive(Debug, Clone)]
 pub struct MatchScore {
+    /// Whether the candidate matched a known signature by exact SHA256.
+    /// Currently implied by `method == ExactSha256`; the flag is kept for
+    /// callers that want a quick boolean without matching on `method`.
+    #[allow(dead_code)]
     pub sha256_match: bool,
     pub ssdeep_similarity: Option<u32>, // 0–100, ≥80 → same family
     pub imphash_match: bool,
@@ -172,12 +183,6 @@ impl FuzzyHasher {
             hasher.update(&buf[..n]);
         }
         Ok(hex::encode(hasher.finalize()))
-    }
-
-    fn hash_bytes(data: &[u8]) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        hex::encode(hasher.finalize())
     }
 
     fn detect_file_type(path: &str) -> FileType {
@@ -393,15 +398,9 @@ fn compute_pe_imphash(path: &str) -> Option<String> {
                         .trim_end_matches(".dll")
                         .to_string();
                     if let Ok(int_iter) = desc.int() {
-                        for import_result in int_iter {
-                            if let Ok(import) = import_result {
-                                if let pelite::pe64::imports::Import::ByName { name, .. } = import {
-                                    entries.push(format!(
-                                        "{}.{}",
-                                        dll,
-                                        name.to_str().unwrap_or("")
-                                    ));
-                                }
+                        for import in int_iter.flatten() {
+                            if let pelite::pe64::imports::Import::ByName { name, .. } = import {
+                                entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
                             }
                         }
                     }
@@ -423,15 +422,9 @@ fn compute_pe_imphash(path: &str) -> Option<String> {
                         .trim_end_matches(".dll")
                         .to_string();
                     if let Ok(int_iter) = desc.int() {
-                        for import_result in int_iter {
-                            if let Ok(import) = import_result {
-                                if let pelite::pe32::imports::Import::ByName { name, .. } = import {
-                                    entries.push(format!(
-                                        "{}.{}",
-                                        dll,
-                                        name.to_str().unwrap_or("")
-                                    ));
-                                }
+                        for import in int_iter.flatten() {
+                            if let pelite::pe32::imports::Import::ByName { name, .. } = import {
+                                entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
                             }
                         }
                     }

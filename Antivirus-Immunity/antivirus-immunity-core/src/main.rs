@@ -116,8 +116,8 @@ async fn main() -> anyhow::Result<()> {
                 println!("    (No files currently in quarantine)");
             } else {
                 println!(
-                    "{:<38} {:<30} {:<20} {}",
-                    "ID", "ORIGINAL PATH", "PROCESS", "DATE"
+                    "{:<38} {:<30} {:<20} DATE",
+                    "ID", "ORIGINAL PATH", "PROCESS"
                 );
                 println!("{:-<38} {:-<30} {:-<20} {:-<20}", "", "", "", "");
                 for entry in active {
@@ -487,7 +487,7 @@ async fn main() -> anyhow::Result<()> {
 
         // Periodic status (every 60 loops)
         loop_count += 1;
-        if loop_count % 60 == 0 {
+        if loop_count.is_multiple_of(60) {
             println!(
                 "\n--- Status: {} | {} ---\n",
                 danger_engine.status_summary(),

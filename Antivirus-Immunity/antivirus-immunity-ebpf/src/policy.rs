@@ -192,22 +192,22 @@ impl PolicyEngine {
 
         // Inside a container?
         if container_id.is_some() {
-            // Suspicious: reverse shell-like patterns
-            if event.comm == "sh" || event.comm == "bash" || event.comm == "dash" {
-                if parent_chain
-                    .iter()
-                    .any(|p| p.contains("python") || p.contains("perl") || p.contains("ruby"))
-                {
-                    return PolicyVerdict {
-                        action: if self.mode == "enforce" {
-                            ResponseAction::Terminate
-                        } else {
-                            ResponseAction::Monitor
-                        },
-                        severity: Severity::High,
-                        reason: "Shell spawned from scripting runtime inside container".to_string(),
-                    };
-                }
+            // Suspicious: reverse shell-like patterns — a shell spawned by a
+            // scripting runtime inside a container is a classic C2 indicator.
+            let is_shell = matches!(event.comm.as_str(), "sh" | "bash" | "dash");
+            let spawned_by_script_runtime = parent_chain
+                .iter()
+                .any(|p| p.contains("python") || p.contains("perl") || p.contains("ruby"));
+            if is_shell && spawned_by_script_runtime {
+                return PolicyVerdict {
+                    action: if self.mode == "enforce" {
+                        ResponseAction::Terminate
+                    } else {
+                        ResponseAction::Monitor
+                    },
+                    severity: Severity::High,
+                    reason: "Shell spawned from scripting runtime inside container".to_string(),
+                };
             }
         }
 

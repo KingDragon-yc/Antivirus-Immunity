@@ -12,11 +12,10 @@
 #![cfg(target_os = "linux")]
 
 use crate::probe::{ProbeType, RawProbeEvent};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashSet;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::time::Duration;
 
 // ─── Netlink constants ───
 const NETLINK_CONNECTOR: i32 = 11;
@@ -121,7 +120,7 @@ impl NetlinkConnector {
         let fd = unsafe { OwnedFd::from_raw_fd(sock) };
 
         // Bind to any port, subscribe to CN_IDX_PROC group
-        let mut addr = SockAddrNl {
+        let addr = SockAddrNl {
             nl_family: libc::AF_NETLINK as libc::sa_family_t,
             nl_pad: 0,
             nl_pid: 0,    // Kernel assigns a port
@@ -435,7 +434,7 @@ impl NetlinkConnector {
                 if payload.len() < 16 {
                     return None;
                 }
-                let pid = u32::from_ne_bytes(payload[0..4].try_into().ok()?) as u32;
+                let pid = u32::from_ne_bytes(payload[0..4].try_into().ok()?);
                 let uid = u32::from_ne_bytes(payload[8..12].try_into().ok()?);
                 Some(RawProbeEvent {
                     pid,
@@ -451,7 +450,9 @@ impl NetlinkConnector {
                     ns_pid: pid,
                 })
             }
-            PROC_EVENT_NONE | _ => None,
+            // Any other event type (including PROC_EVENT_NONE and GID which
+            // we don't enrich here) is ignored.
+            _ => None,
         }
     }
 
@@ -482,11 +483,11 @@ impl NetlinkConnector {
         // tracked separately (P1).
         std::fs::read_to_string(format!("/proc/{}/cgroup", pid))
             .ok()
-            .and_then(|s| {
+            .map(|s| {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 s.hash(&mut hasher);
-                Some(hasher.finish())
+                hasher.finish()
             })
             .unwrap_or(0)
     }

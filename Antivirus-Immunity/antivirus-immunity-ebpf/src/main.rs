@@ -402,6 +402,11 @@ async fn main() -> anyhow::Result<()> {
                 antivirus_immunity_common::event::ResponseAction::Monitor => {
                     // ── Async Deferred Blocking ──
                     // Suspicious process: suspend it, ask AI, then resume or kill.
+                    // clippy::collapsible_match wants to merge this `if` into the
+                    // surrounding match arm, but the match keys on `verdict.action`
+                    // (an enum) while this `if` keys on a runtime bool — they are
+                    // not collapsible without obscuring intent, so we allow it.
+                    #[allow(clippy::collapsible_match)]
                     if ai_cortex.is_available() && event.pid > 1 {
                         println!(
                             "    [🧠] Deferred blocking PID {}: SIGSTOP → AI analysis...",
