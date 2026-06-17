@@ -384,8 +384,10 @@ impl ImmuneSystem {
                         "Ssdeep {}% similarity to known trusted binary — likely legitimate update",
                         similarity
                     );
-                    if matches!(path_verdict, PathVerdict::Verified | PathVerdict::TrustedLocation)
-                    {
+                    if matches!(
+                        path_verdict,
+                        PathVerdict::Verified | PathVerdict::TrustedLocation
+                    ) {
                         return Assessment::Safe;
                     }
                     return Assessment::NeedsAiReview(reason);
@@ -395,8 +397,10 @@ impl ImmuneSystem {
                     let reason =
                         "Import table matches known trusted software — possible variant or update"
                             .to_string();
-                    if matches!(path_verdict, PathVerdict::Verified | PathVerdict::TrustedLocation)
-                    {
+                    if matches!(
+                        path_verdict,
+                        PathVerdict::Verified | PathVerdict::TrustedLocation
+                    ) {
                         return Assessment::Safe;
                     }
                     return Assessment::NeedsAiReview(reason);

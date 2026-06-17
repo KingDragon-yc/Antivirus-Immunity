@@ -11,4 +11,6 @@ pub use memory_b_cell::{Assessment, ImmuneSystem};
 // Windows (`core`) and Linux (`ebpf`) engines use the same ProcessContext,
 // prompt-injection hardening, and verdict parsing. Re-export the public API
 // here so existing `use immune::ai_cortex::{...}` call sites keep working.
-pub use antivirus_immunity_common::ai_cortex::{AiCortex, AiCortexConfig, AiVerdict, ProcessContext};
+pub use antivirus_immunity_common::ai_cortex::{
+    AiCortex, AiCortexConfig, AiVerdict, ProcessContext,
+};

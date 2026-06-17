@@ -68,7 +68,7 @@ struct CnMsg {
     id: CbId,
     seq: u32,
     ack: u32,
-    len: u16,   // Length of payload data
+    len: u16, // Length of payload data
     flags: u16,
 }
 
@@ -210,7 +210,8 @@ impl NetlinkConnector {
             );
             std::ptr::copy_nonoverlapping(
                 &payload as *const u32 as *const u8,
-                buf.as_mut_ptr().add(NLMSG_OVERHEAD + std::mem::size_of::<CnMsg>()),
+                buf.as_mut_ptr()
+                    .add(NLMSG_OVERHEAD + std::mem::size_of::<CnMsg>()),
                 std::mem::size_of::<u32>(),
             );
         }
@@ -306,9 +307,7 @@ impl NetlinkConnector {
             // Parse all nlmsghdr-delimited messages in the buffer
             let mut offset = 0usize;
             while offset + NLMSG_OVERHEAD <= received {
-                let hdr = unsafe {
-                    &*(buf.as_ptr().add(offset) as *const NlMsgHdr)
-                };
+                let hdr = unsafe { &*(buf.as_ptr().add(offset) as *const NlMsgHdr) };
                 let msg_len = hdr.nlmsg_len as usize;
                 if msg_len < NLMSG_OVERHEAD || offset + msg_len > received {
                     break;
@@ -319,9 +318,7 @@ impl NetlinkConnector {
                         // Parse cn_msg + proc_event
                         let cn_offset = offset + NLMSG_OVERHEAD;
                         if cn_offset + std::mem::size_of::<CnMsg>() <= received {
-                            let cn = unsafe {
-                                &*(buf.as_ptr().add(cn_offset) as *const CnMsg)
-                            };
+                            let cn = unsafe { &*(buf.as_ptr().add(cn_offset) as *const CnMsg) };
                             if cn.id.idx == CN_IDX_PROC && cn.id.val == CN_VAL_PROC {
                                 let data_offset = cn_offset + std::mem::size_of::<CnMsg>();
                                 let data_len = cn.len as usize;

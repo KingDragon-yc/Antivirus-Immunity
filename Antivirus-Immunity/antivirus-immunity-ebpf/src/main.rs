@@ -44,8 +44,8 @@ mod probe;
 // `procfs` is entirely Linux-only (the file starts with `#![cfg(target_os =
 // "linux")]`), so it compiles to nothing on other platforms automatically — no
 // need to cfg-gate the `mod` declaration here too.
-mod procfs;
 mod process_tree;
+mod procfs;
 mod resource_aware;
 
 use antivirus_immunity_common::{
@@ -176,7 +176,10 @@ async fn main() -> anyhow::Result<()> {
 
     // ==================== LOGGER ====================
     let logger = Logger::new().unwrap_or_else(|e| {
-        eprintln!("[!] Logger init failed: {}. Continuing without file logging.", e);
+        eprintln!(
+            "[!] Logger init failed: {}. Continuing without file logging.",
+            e
+        );
         Logger::disabled()
     });
 
@@ -249,7 +252,9 @@ async fn main() -> anyhow::Result<()> {
     // wired up (see bpf/probes.bpf.c and the roadmap). The engine currently
     // ingests process events via the Netlink Connector, falling back to /proc
     // polling. ProbeManager::new prints which source is actually active.
-    println!("[*] Initializing event source (eBPF ring buffer not yet wired — using Netlink/proc)...");
+    println!(
+        "[*] Initializing event source (eBPF ring buffer not yet wired — using Netlink/proc)..."
+    );
 
     let mut probe_manager = probe::ProbeManager::new(lite_mode)?;
     println!("[*] Planned eBPF probes (compiled in bpf/probes.bpf.c, not yet attached):");
@@ -398,7 +403,10 @@ async fn main() -> anyhow::Result<()> {
                     // ── Async Deferred Blocking ──
                     // Suspicious process: suspend it, ask AI, then resume or kill.
                     if ai_cortex.is_available() && event.pid > 1 {
-                        println!("    [🧠] Deferred blocking PID {}: SIGSTOP → AI analysis...", event.pid);
+                        println!(
+                            "    [🧠] Deferred blocking PID {}: SIGSTOP → AI analysis...",
+                            event.pid
+                        );
 
                         // Step 1: Suspend the process immediately and remember it so
                         // the shutdown signal handler can SIGCONT it if we crash/exit
@@ -414,7 +422,10 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("    [!] SIGSTOP failed for PID {}: {}", event.pid, e);
+                                    eprintln!(
+                                        "    [!] SIGSTOP failed for PID {}: {}",
+                                        event.pid, e
+                                    );
                                 }
                             }
                         }

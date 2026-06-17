@@ -105,10 +105,7 @@ impl FuzzyHasher {
 
     /// Compare a candidate signature against a database of known signatures.
     /// Returns the best match (if any) with the match method and score.
-    pub fn fuzzy_match(
-        candidate: &FuzzySignature,
-        database: &[FuzzySignature],
-    ) -> MatchScore {
+    pub fn fuzzy_match(candidate: &FuzzySignature, database: &[FuzzySignature]) -> MatchScore {
         let mut best = MatchScore {
             sha256_match: false,
             ssdeep_similarity: None,
@@ -357,10 +354,12 @@ fn levenshtein(s: &str, t: &str) -> usize {
     for i in 1..=n {
         curr[0] = i;
         for j in 1..=m {
-            let cost = if s_chars[i - 1] == t_chars[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            let cost = if s_chars[i - 1] == t_chars[j - 1] {
+                0
+            } else {
+                1
+            };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }

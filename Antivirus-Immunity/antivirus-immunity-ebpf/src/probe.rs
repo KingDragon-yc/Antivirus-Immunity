@@ -83,7 +83,9 @@ impl ProbeManager {
         #[cfg(target_os = "linux")]
         {
             if netlink.is_some() {
-                println!("[+] ProbeManager: Netlink Connector initialized (zero-polling process events)");
+                println!(
+                    "[+] ProbeManager: Netlink Connector initialized (zero-polling process events)"
+                );
             } else {
                 println!("[!] ProbeManager: Netlink Connector unavailable, falling back to /proc polling");
             }

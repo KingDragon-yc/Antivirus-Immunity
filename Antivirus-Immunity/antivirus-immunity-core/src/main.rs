@@ -33,10 +33,7 @@ fn truncate_chars(s: &str, max: usize) -> &str {
 /// ("Verified"/"TrustedLocation"/...); the ebpf engine instead passes the raw
 /// executable path to the `_by_path` variant.
 fn ai_destructive_allowed(confidence: f64, path_verdict: &str) -> bool {
-    antivirus_immunity_common::safety::ai_destructive_allowed_by_verdict(
-        confidence,
-        path_verdict,
-    )
+    antivirus_immunity_common::safety::ai_destructive_allowed_by_verdict(confidence, path_verdict)
 }
 
 #[derive(Parser, Debug)]
@@ -347,17 +344,12 @@ async fn main() -> anyhow::Result<()> {
                                 // system location, is logged for review instead of
                                 // executed, to bound the blast radius of a model
                                 // false positive.
-                                let destructive_ok = ai_destructive_allowed(
-                                    verdict.confidence,
-                                    &ctx.path_verdict,
-                                );
+                                let destructive_ok =
+                                    ai_destructive_allowed(verdict.confidence, &ctx.path_verdict);
                                 let wants_destructive = verdict.recommendation == "TERMINATE"
                                     || verdict.recommendation == "QUARANTINE";
 
-                                if active_defense
-                                    && wants_destructive
-                                    && !destructive_ok
-                                {
+                                if active_defense && wants_destructive && !destructive_ok {
                                     println!(
                                         "    [⚠] AI recommended {} but action SUPPRESSED (confidence {:.0}%, path verdict: {}). Logged for review.",
                                         verdict.recommendation,
@@ -375,9 +367,7 @@ async fn main() -> anyhow::Result<()> {
                                             ctx.path_verdict,
                                         ),
                                     );
-                                } else if active_defense
-                                    && verdict.recommendation == "TERMINATE"
-                                {
+                                } else if active_defense && verdict.recommendation == "TERMINATE" {
                                     print!("    [!!!] AI RECOMMENDS TERMINATION. ACTIVATING CYTOTOXIC T CELLS... ");
                                     match CytotoxicTCell::induce_apoptosis(p.pid) {
                                         Ok(_) => {
