@@ -41,6 +41,10 @@ mod netlink_connector;
 mod network;
 mod policy;
 mod probe;
+// `procfs` is entirely Linux-only (the file starts with `#![cfg(target_os =
+// "linux")]`), so it compiles to nothing on other platforms automatically — no
+// need to cfg-gate the `mod` declaration here too.
+mod procfs;
 mod process_tree;
 mod resource_aware;
 
@@ -51,6 +55,46 @@ use antivirus_immunity_common::{
 };
 use chrono::Utc;
 use clap::Parser;
+
+/// Read a process's start time (field 22 of `/proc/<pid>/stat`, clock ticks
+/// since boot). Used as a PID-reuse fingerprint: if it changes, the PID now
+/// refers to a different process. Thin wrapper over [`procfs::read_starttime`]
+/// so the comm-aware stat parser exists in exactly one place.
+#[cfg(target_os = "linux")]
+fn proc_start_time(pid: u32) -> Option<u64> {
+    crate::procfs::read_starttime(pid)
+}
+
+/// SIGKILL `pid` only if it is still the same process we observed earlier
+/// (its start time is unchanged). Returns false without signalling if the PID
+/// was reused or has already exited. Guards against killing an innocent
+/// process that reused the PID during the AI deferral window.
+#[cfg(target_os = "linux")]
+fn guarded_sigkill(pid: u32, expected_start: Option<u64>) -> bool {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+    // `expected_start == None` means we could not read `/proc/<pid>/stat`
+    // when fingerprinting (process already exited, or permission denied).
+    // That is precisely when PID reuse is most likely, so we MUST refuse to
+    // fire rather than treat None as "safe to kill" — the previous logic
+    // gated only on `is_some()` and would send SIGKILL unconditionally here.
+    let Some(expected) = expected_start else {
+        eprintln!(
+            "    [!] Cannot verify PID {} identity (/proc unreadable); aborting SIGKILL to avoid hitting the wrong process.",
+            pid
+        );
+        return false;
+    };
+    if proc_start_time(pid) != Some(expected) {
+        eprintln!(
+            "    [!] PID {} was reused or has exited; aborting SIGKILL to avoid hitting the wrong process.",
+            pid
+        );
+        return false;
+    }
+    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+    true
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -132,8 +176,8 @@ async fn main() -> anyhow::Result<()> {
 
     // ==================== LOGGER ====================
     let logger = Logger::new().unwrap_or_else(|e| {
-        eprintln!("[!] Logger init failed: {}. Continuing.", e);
-        Logger::new().unwrap()
+        eprintln!("[!] Logger init failed: {}. Continuing without file logging.", e);
+        Logger::disabled()
     });
 
     // ==================== POLICY ENGINE ====================
@@ -199,20 +243,16 @@ async fn main() -> anyhow::Result<()> {
         danger_level: Some(format!("{:?}", DangerLevel::Normal)),
     });
 
-    // ==================== eBPF PROBE LOADING ====================
+    // ==================== EVENT SOURCE INITIALIZATION ====================
     println!();
-    println!("[*] Loading eBPF probes...");
-
-    // In the full Linux build, this is where we'd:
-    // 1. Open + load the compiled eBPF object (CO-RE .bpf.o)
-    // 2. Attach probes to kernel hooks
-    // 3. Set up BPF Ring Buffer consumer
-    //
-    // For now, we demonstrate the architecture with /proc-based polling
-    // as a fallback for development/testing on non-eBPF systems.
+    // NOTE: CO-RE eBPF object loading and ring-buffer consumption are not yet
+    // wired up (see bpf/probes.bpf.c and the roadmap). The engine currently
+    // ingests process events via the Netlink Connector, falling back to /proc
+    // polling. ProbeManager::new prints which source is actually active.
+    println!("[*] Initializing event source (eBPF ring buffer not yet wired — using Netlink/proc)...");
 
     let mut probe_manager = probe::ProbeManager::new(lite_mode)?;
-    println!("[+] Probes initialized:");
+    println!("[*] Planned eBPF probes (compiled in bpf/probes.bpf.c, not yet attached):");
     println!("    - Process: tracepoint/syscalls/sys_enter_execve");
     println!("    - Network: kprobe/tcp_connect, kprobe/udp_sendmsg");
     if !lite_mode {
@@ -241,8 +281,53 @@ async fn main() -> anyhow::Result<()> {
     //
     // Async Deferred Blocking flow:
     //   Suspicious process → SIGSTOP → AI Cortex (500ms timeout) → SIGCONT or SIGKILL
-    println!("[*] Polling mode: Netlink Connector (kernel-driven, zero CPU waste)");
+    // (The active source — Netlink vs /proc — was reported by ProbeManager above.)
     println!();
+
+    // ── Graceful shutdown: track SIGSTOP'd PIDs and resume them on exit ──
+    //
+    // P0-4 fix: previously, Ctrl+C / SIGTERM killed the engine immediately
+    // and left every process it had SIGSTOP'd (waiting for an AI verdict)
+    // frozen forever. We now remember each stopped PID and install a signal
+    // handler that SIGCONT's them all before the process exits.
+    #[cfg(target_os = "linux")]
+    let stopped_pids: std::sync::Arc<std::sync::Mutex<Vec<u32>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    #[cfg(target_os = "linux")]
+    {
+        let stopped_pids_for_signal = stopped_pids.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigint = match signal(SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[!] Could not install SIGINT handler: {}", e);
+                    return;
+                }
+            };
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[!] Could not install SIGTERM handler: {}", e);
+                    return;
+                }
+            };
+            tokio::select! {
+                _ = sigint.recv() => {}
+                _ = sigterm.recv() => {}
+            }
+            eprintln!("\n[!] Signal received: resuming all SIGSTOP'd processes before exit.");
+            if let Ok(pids) = stopped_pids_for_signal.lock() {
+                use nix::sys::signal::{kill, Signal};
+                use nix::unistd::Pid;
+                for pid in pids.iter() {
+                    let _ = kill(Pid::from_raw(*pid as i32), Signal::SIGCONT);
+                }
+            }
+            std::process::exit(130);
+        });
+    }
 
     loop {
         let events = probe_manager.poll_events()?;
@@ -262,7 +347,10 @@ async fn main() -> anyhow::Result<()> {
 
             let container_label = container_id
                 .as_deref()
-                .map(|id| &id[..id.len().min(12)])
+                .map(|id| match id.char_indices().nth(12) {
+                    Some((idx, _)) => &id[..idx],
+                    None => id,
+                })
                 .unwrap_or("HOST");
 
             let verdict_str = format!("{:?}", verdict.action);
@@ -288,15 +376,19 @@ async fn main() -> anyhow::Result<()> {
                 danger_level: None,
             });
 
+            // Fingerprint the process now so later kills can detect PID reuse.
+            #[cfg(target_os = "linux")]
+            let proc_start = proc_start_time(event.pid);
+            #[cfg(not(target_os = "linux"))]
+            let proc_start: Option<u64> = None;
+
             // ── Execute action ──
             match verdict.action {
                 antivirus_immunity_common::event::ResponseAction::Terminate => {
                     println!("    [!!!] KILLING PID {}...", event.pid);
                     #[cfg(target_os = "linux")]
                     {
-                        use nix::sys::signal::{kill, Signal};
-                        use nix::unistd::Pid;
-                        let _ = kill(Pid::from_raw(event.pid as i32), Signal::SIGKILL);
+                        guarded_sigkill(event.pid, proc_start);
                     }
                 }
                 antivirus_immunity_common::event::ResponseAction::BlockAccess => {
@@ -308,17 +400,29 @@ async fn main() -> anyhow::Result<()> {
                     if ai_cortex.is_available() && event.pid > 1 {
                         println!("    [🧠] Deferred blocking PID {}: SIGSTOP → AI analysis...", event.pid);
 
-                        // Step 1: Suspend the process immediately
+                        // Step 1: Suspend the process immediately and remember it so
+                        // the shutdown signal handler can SIGCONT it if we crash/exit
+                        // mid-verdict (otherwise it would stay frozen forever).
                         #[cfg(target_os = "linux")]
                         {
                             use nix::sys::signal::{kill, Signal};
                             use nix::unistd::Pid;
-                            if let Err(e) = kill(Pid::from_raw(event.pid as i32), Signal::SIGSTOP) {
-                                eprintln!("    [!] SIGSTOP failed for PID {}: {}", event.pid, e);
+                            match kill(Pid::from_raw(event.pid as i32), Signal::SIGSTOP) {
+                                Ok(()) => {
+                                    if let Ok(mut guard) = stopped_pids.lock() {
+                                        guard.push(event.pid);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("    [!] SIGSTOP failed for PID {}: {}", event.pid, e);
+                                }
                             }
                         }
 
-                        // Step 2: Build AI context and spawn deferred evaluation
+                        // Step 2: Build AI context and spawn deferred evaluation.
+                        // `path_verdict` / `yara_matches` are new unified fields
+                        // (see common::ai_cortex::ProcessContext); ebpf has no
+                        // path validator yet so they stay empty.
                         let ctx = antivirus_immunity_common::ai_cortex::ProcessContext {
                             pid: event.pid,
                             name: event.comm.clone(),
@@ -331,6 +435,8 @@ async fn main() -> anyhow::Result<()> {
                             file_access: Vec::new(),
                             danger_level: format!("{:?}", verdict.severity),
                             is_known_hash: false,
+                            path_verdict: String::new(),
+                            yara_matches: Vec::new(),
                         };
 
                         let logger_clone = logger.clone();
@@ -338,8 +444,22 @@ async fn main() -> anyhow::Result<()> {
                         let pid = event.pid;
                         let comm = event.comm.clone();
                         let detail_clone = detail.clone();
+                        let proc_start_for_task = proc_start;
+                        // Clone the tracker so the deferred task can remove the
+                        // PID once it SIGCONTs/SIGKILLs it (frees it from the
+                        // shutdown-resume set).
+                        #[cfg(target_os = "linux")]
+                        let stopped_pids_for_task = stopped_pids.clone();
 
                         deferred_tasks.push(tokio::spawn(async move {
+                            // Helper: remove this PID from the stopped set (linux only).
+                            #[cfg(target_os = "linux")]
+                            let forget_stopped = || {
+                                if let Ok(mut guard) = stopped_pids_for_task.lock() {
+                                    guard.retain(|p| *p != pid);
+                                }
+                            };
+
                             // Step 3: AI evaluation with 500ms hard timeout
                             let ai_result = tokio::time::timeout(
                                 std::time::Duration::from_millis(500),
@@ -359,14 +479,46 @@ async fn main() -> anyhow::Result<()> {
 
                                     let action = match verdict.recommendation.as_str() {
                                         "TERMINATE" | "BLOCK" => {
-                                            println!("    [!!!] AI: ELIMINATING PID {}...", pid);
-                                            #[cfg(target_os = "linux")]
-                                            {
-                                                use nix::sys::signal::{kill, Signal};
-                                                use nix::unistd::Pid;
-                                                let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+                                            // P0-2 safety gate: a small local model can
+                                            // hallucinate, and killing a critical system
+                                            // process is far worse than a miss. Mirror the
+                                            // Windows core crate: require both high
+                                            // confidence AND a non-trusted path. Otherwise
+                                            // suppress the kill and resume for human review.
+                                            let path_str = ctx.path.as_deref().unwrap_or("");
+                                            let destructive_ok = antivirus_immunity_common::safety::ai_destructive_allowed_by_path(
+                                                verdict.confidence, path_str,
+                                            );
+                                            if destructive_ok {
+                                                println!("    [!!!] AI: ELIMINATING PID {}...", pid);
+                                                #[cfg(target_os = "linux")]
+                                                {
+                                                    // Re-verify identity: the process was SIGSTOP'd, but
+                                                    // it could have exited before the stop landed and had
+                                                    // its PID reused. Only kill if the fingerprint matches.
+                                                    guarded_sigkill(pid, proc_start_for_task);
+                                                    forget_stopped();
+                                                }
+                                                "TERMINATE"
+                                            } else {
+                                                // Low confidence or trusted location: do NOT kill.
+                                                // Resume the process and log the suppression so a
+                                                // human can review the AI's reasoning.
+                                                use antivirus_immunity_common::safety::truncate_chars;
+                                                println!(
+                                                    "    [⚠] AI recommended kill but SUPPRESSED (confidence {:.0}%, path: {}). Resuming for review.",
+                                                    verdict.confidence * 100.0,
+                                                    truncate_chars(path_str, 40),
+                                                );
+                                                #[cfg(target_os = "linux")]
+                                                {
+                                                    use nix::sys::signal::{kill, Signal};
+                                                    use nix::unistd::Pid;
+                                                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGCONT);
+                                                    forget_stopped();
+                                                }
+                                                "SUPPRESSED"
                                             }
-                                            "TERMINATE"
                                         }
                                         _ => {
                                             // SAFE/ALLOW/MONITOR: resume the process
@@ -376,6 +528,7 @@ async fn main() -> anyhow::Result<()> {
                                                 use nix::sys::signal::{kill, Signal};
                                                 use nix::unistd::Pid;
                                                 let _ = kill(Pid::from_raw(pid as i32), Signal::SIGCONT);
+                                                forget_stopped();
                                             }
                                             "RESUMED"
                                         }
@@ -408,6 +561,7 @@ async fn main() -> anyhow::Result<()> {
                                         use nix::sys::signal::{kill, Signal};
                                         use nix::unistd::Pid;
                                         let _ = kill(Pid::from_raw(pid as i32), Signal::SIGCONT);
+                                        forget_stopped();
                                     }
 
                                     logger_clone.log(&SecurityEvent {

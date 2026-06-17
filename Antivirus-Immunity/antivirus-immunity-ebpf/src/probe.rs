@@ -177,36 +177,28 @@ impl ProbeManager {
         Ok(events)
     }
 
+    // /proc helpers now delegate to `crate::procfs` so the (comm-aware)
+    // /proc/<pid>/stat parser lives in one place and the ppid-parse bug
+    // (incorrect when comm contains spaces) is fixed once for all callers.
     #[cfg(target_os = "linux")]
     fn read_proc_comm(pid: u32) -> String {
-        std::fs::read_to_string(format!("/proc/{}/comm", pid))
-            .unwrap_or_default()
-            .trim()
-            .to_string()
+        crate::procfs::read_comm(pid)
     }
 
     #[cfg(target_os = "linux")]
     fn read_proc_exe(pid: u32) -> String {
-        std::fs::read_link(format!("/proc/{}/exe", pid))
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
+        crate::procfs::read_exe(pid)
     }
 
     #[cfg(target_os = "linux")]
     fn read_proc_ppid(pid: u32) -> u32 {
-        std::fs::read_to_string(format!("/proc/{}/stat", pid))
-            .ok()
-            .and_then(|s| {
-                // /proc/pid/stat format: pid (comm) state ppid ...
-                let parts: Vec<&str> = s.splitn(5, ' ').collect();
-                parts.get(3)?.parse().ok()
-            })
-            .unwrap_or(0)
+        crate::procfs::read_ppid(pid)
     }
 
     #[cfg(target_os = "linux")]
     fn read_proc_cgroup_id(pid: u32) -> u64 {
-        // Read cgroup path to derive container ID
+        // NOTE: DefaultHasher is not stable across runs (randomized seed);
+        // suitable only as a single-process de-dup key. See procfs/TODO.
         std::fs::read_to_string(format!("/proc/{}/cgroup", pid))
             .ok()
             .and_then(|s| {

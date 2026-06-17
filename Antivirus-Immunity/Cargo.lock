@@ -126,8 +126,9 @@ dependencies = [
 
 [[package]]
 name = "antivirus-immunity-core"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
+ "antivirus-immunity-common",
  "anyhow",
  "chrono",
  "clap",

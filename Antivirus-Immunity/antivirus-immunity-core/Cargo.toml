@@ -1,11 +1,13 @@
 [package]
 name = "antivirus-immunity-core"
-version = "0.3.0"
+version = "0.4.1"
 edition = "2021"
 description = "An antivirus engine inspired by the biological immune system, with local AI cortex"
 authors = ["KingDragon-yc"]
 
 [dependencies]
+antivirus-immunity-common = { path = "../antivirus-immunity-common" }
+
 tokio = { version = "1.0", features = ["full"] }
 anyhow = "1.0"
 clap = { version = "4.0", features = ["derive"] }

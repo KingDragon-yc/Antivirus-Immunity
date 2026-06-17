@@ -289,22 +289,39 @@ fn b64_encode(bits: u64) -> char {
 /// Compute similarity percentage between two ssdeep signatures.
 /// Returns 0–100 where ≥ 80 indicates same file or close variant.
 pub fn ssdeep_similarity(a: &str, b: &str) -> u32 {
-    // Extract signature bodies from "bs:sig1:sig2" format.
-    // Try matching sig1→sig1 and sig2→sig2, take the best.
+    // Signatures are "bs:sig@bs:sig@2bs" as produced by `compute_ssdeep`.
     let a_parts: Vec<&str> = a.split(':').collect();
     let b_parts: Vec<&str> = b.split(':').collect();
 
-    let a_sig1 = a_parts.get(1).copied().unwrap_or(a);
+    let a_bs: u64 = a_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let b_bs: u64 = b_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let a_sig1 = a_parts.get(1).copied().unwrap_or("");
     let a_sig2 = a_parts.get(2).copied().unwrap_or("");
-    let b_sig1 = b_parts.get(1).copied().unwrap_or(b);
+    let b_sig1 = b_parts.get(1).copied().unwrap_or("");
     let b_sig2 = b_parts.get(2).copied().unwrap_or("");
 
-    let sim1 = compare_signatures(a_sig1, b_sig1);
-    let sim2 = compare_signatures(a_sig2, b_sig2);
-    let sim_cross1 = compare_signatures(a_sig1, b_sig2);
-    let sim_cross2 = compare_signatures(a_sig2, b_sig1);
+    // A block size of 0 means the prefix was missing/unparseable — not comparable.
+    if a_bs == 0 || b_bs == 0 {
+        return 0;
+    }
 
-    sim1.max(sim2).max(sim_cross1).max(sim_cross2)
+    // Only signature bands computed at the SAME effective block size are
+    // comparable. Comparing across block sizes (as the previous all-pairs
+    // edit distance did) is meaningless and yields false "same family" hits.
+    // ssdeep keeps two bands (bs and 2*bs) precisely so that files whose target
+    // block size differs by one step can still be compared.
+    let mut best = 0;
+    if a_bs == b_bs {
+        best = best.max(compare_signatures(a_sig1, b_sig1));
+        best = best.max(compare_signatures(a_sig2, b_sig2));
+    }
+    if a_bs == b_bs.saturating_mul(2) {
+        best = best.max(compare_signatures(a_sig1, b_sig2));
+    }
+    if a_bs.saturating_mul(2) == b_bs {
+        best = best.max(compare_signatures(a_sig2, b_sig1));
+    }
+    best
 }
 
 fn compare_signatures(a: &str, b: &str) -> u32 {

@@ -69,18 +69,12 @@ impl ProcessTree {
         chain
     }
 
+    /// Resolve (ppid, comm) for a PID via /proc. Delegates to `crate::procfs`
+    /// so the comm-aware `/proc/<pid>/stat` parser is shared with the other
+    /// modules (the previous local copy mis-parsed ppid when `comm` contained
+    /// spaces, see procfs::parse_ppid).
     #[cfg(target_os = "linux")]
     fn read_proc_parent(pid: u32) -> Option<(u32, String)> {
-        let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
-        let comm = std::fs::read_to_string(format!("/proc/{}/comm", pid))
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        // Parse ppid from /proc/pid/stat
-        let parts: Vec<&str> = stat.splitn(5, ' ').collect();
-        let ppid = parts.get(3)?.parse().ok()?;
-
-        Some((ppid, comm))
+        crate::procfs::read_parent(pid)
     }
 }
