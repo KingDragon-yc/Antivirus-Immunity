@@ -2,11 +2,11 @@ use anyhow::Result;
 use std::collections::HashSet;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, MAX_PATH};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, PROCESSENTRY32, Process32First, Process32Next, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameA, PROCESS_NAME_FORMAT, PROCESS_QUERY_INFORMATION,
-    PROCESS_VM_READ,
+    OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+    QueryFullProcessImageNameA,
 };
 
 use super::hash_cache::HashCache;
@@ -151,7 +151,10 @@ impl TollLikeReceptor {
             .iter()
             .position(|&c| c == 0)
             .unwrap_or(entry.szExeFile.len());
-        String::from_utf8_lossy(&entry.szExeFile[..end]).to_string()
+        // windows 0.57 changed szExeFile from `[u8; N]` to `[i8; N]`, so cast
+        // each byte back to u8 for from_utf8_lossy.
+        let bytes: Vec<u8> = entry.szExeFile[..end].iter().map(|&c| c as u8).collect();
+        String::from_utf8_lossy(&bytes).to_string()
     }
 
     /// Get process path and hash with RAII handle management

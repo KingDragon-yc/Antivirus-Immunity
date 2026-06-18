@@ -136,7 +136,7 @@ impl FuzzyHasher {
             }
 
             // ── Ssdeep similarity ──
-            if let (Some(ref c_ss), Some(ref k_ss)) = (&candidate.ssdeep, &known.ssdeep) {
+            if let (Some(c_ss), Some(k_ss)) = (&candidate.ssdeep, &known.ssdeep) {
                 let sim = ssdeep_similarity(c_ss, k_ss);
                 if sim > best.ssdeep_similarity.unwrap_or(0) {
                     best.ssdeep_similarity = Some(sim);
@@ -145,25 +145,25 @@ impl FuzzyHasher {
             }
 
             // ── Imphash match ──
-            if let (Some(ref c_im), Some(ref k_im)) = (&candidate.imphash, &known.imphash) {
-                if c_im == k_im {
-                    best.imphash_match = true;
-                    if best.method != MatchMethod::Ssdeep(0) {
-                        best.method = MatchMethod::Imphash;
-                    }
+            if let (Some(c_im), Some(k_im)) = (&candidate.imphash, &known.imphash)
+                && c_im == k_im
+            {
+                best.imphash_match = true;
+                if best.method != MatchMethod::Ssdeep(0) {
+                    best.method = MatchMethod::Imphash;
                 }
             }
         }
 
         // If ssdeep similarity is below threshold, don't report it as a match
-        if let MatchMethod::Ssdeep(sim) = best.method {
-            if sim < 80 {
-                best.method = if best.imphash_match {
-                    MatchMethod::Imphash
-                } else {
-                    MatchMethod::None
-                };
-            }
+        if let MatchMethod::Ssdeep(sim) = best.method
+            && sim < 80
+        {
+            best.method = if best.imphash_match {
+                MatchMethod::Imphash
+            } else {
+                MatchMethod::None
+            };
         }
 
         best
@@ -387,21 +387,21 @@ fn compute_pe_imphash(path: &str) -> Option<String> {
     // pe64::Pe and pe32::Pe are distinct traits.
     {
         use pelite::pe64::Pe;
-        if let Ok(file) = pelite::pe64::PeFile::from_bytes(data) {
-            if let Ok(imports) = file.imports() {
-                for desc in imports {
-                    let dll_name = desc.dll_name().ok()?;
-                    let dll = dll_name
-                        .to_str()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .trim_end_matches(".dll")
-                        .to_string();
-                    if let Ok(int_iter) = desc.int() {
-                        for import in int_iter.flatten() {
-                            if let pelite::pe64::imports::Import::ByName { name, .. } = import {
-                                entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
-                            }
+        if let Ok(file) = pelite::pe64::PeFile::from_bytes(data)
+            && let Ok(imports) = file.imports()
+        {
+            for desc in imports {
+                let dll_name = desc.dll_name().ok()?;
+                let dll = dll_name
+                    .to_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .trim_end_matches(".dll")
+                    .to_string();
+                if let Ok(int_iter) = desc.int() {
+                    for import in int_iter.flatten() {
+                        if let pelite::pe64::imports::Import::ByName { name, .. } = import {
+                            entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
                         }
                     }
                 }
@@ -411,21 +411,21 @@ fn compute_pe_imphash(path: &str) -> Option<String> {
 
     if entries.is_empty() {
         use pelite::pe32::Pe;
-        if let Ok(file) = pelite::pe32::PeFile::from_bytes(data) {
-            if let Ok(imports) = file.imports() {
-                for desc in imports {
-                    let dll_name = desc.dll_name().ok()?;
-                    let dll = dll_name
-                        .to_str()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .trim_end_matches(".dll")
-                        .to_string();
-                    if let Ok(int_iter) = desc.int() {
-                        for import in int_iter.flatten() {
-                            if let pelite::pe32::imports::Import::ByName { name, .. } = import {
-                                entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
-                            }
+        if let Ok(file) = pelite::pe32::PeFile::from_bytes(data)
+            && let Ok(imports) = file.imports()
+        {
+            for desc in imports {
+                let dll_name = desc.dll_name().ok()?;
+                let dll = dll_name
+                    .to_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .trim_end_matches(".dll")
+                    .to_string();
+                if let Ok(int_iter) = desc.int() {
+                    for import in int_iter.flatten() {
+                        if let pelite::pe32::imports::Import::ByName { name, .. } = import {
+                            entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
                         }
                     }
                 }
@@ -479,4 +479,139 @@ fn compute_elf_imphash(path: &str) -> Option<String> {
     let joined = imports.join(",");
     hasher.update(joined.as_bytes());
     Some(hex::encode(hasher.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── ssdeep similarity ───
+
+    #[test]
+    fn ssdeep_identical_signatures_score_100() {
+        // Two identical signatures must be 100% similar.
+        let sig = "3:abcdefghij:abcdefghij";
+        assert_eq!(ssdeep_similarity(sig, sig), 100);
+    }
+
+    #[test]
+    fn ssdeep_completely_different_score_low() {
+        // Different block sizes are only comparable across the bs/2bs bands;
+        // totally unrelated content should yield a low score.
+        let a = "3:aaaaaaaaaa:aaaaaaaaaa";
+        let b = "3:zzzzzzzzzz:zzzzzzzzzz";
+        let score = ssdeep_similarity(a, b);
+        assert!(score < 50, "expected low similarity, got {score}");
+    }
+
+    #[test]
+    fn ssdeep_malformed_returns_zero() {
+        // Missing block-size prefix must not panic; returns 0.
+        assert_eq!(ssdeep_similarity("no-colon-here", "3:x:x"), 0);
+        assert_eq!(ssdeep_similarity("", "3:x:x"), 0);
+    }
+
+    // ─── block size selection ───
+
+    #[test]
+    fn block_size_grows_with_file_length() {
+        // Larger files should get larger block sizes (target ~64 chunks).
+        // The algorithm doubles bs from 3 until bs*64 >= len or bs hits the
+        // guard, so the result is always a power-of-two multiple of 3 and is
+        // bounded by the guard value used in determine_block_size.
+        let small = determine_block_size(64);
+        let large = determine_block_size(1_000_000);
+        assert!(small >= 3);
+        assert!(
+            large > small,
+            "large file should have bigger block size (small={small}, large={large})"
+        );
+        // Allow generous headroom over the implementation's guard; the exact
+        // ceiling is an internal detail, what matters is monotonicity + lower
+        // bound, which the assertions above cover.
+        assert!(large <= 32768, "block size unexpectedly large: {large}");
+    }
+
+    #[test]
+    fn block_size_zero_length_is_minimum() {
+        assert_eq!(determine_block_size(0), 3);
+    }
+
+    // ─── levenshtein ───
+
+    #[test]
+    fn levenshtein_basic() {
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("abc", "abc"), 0);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+    }
+
+    #[test]
+    fn levenshtein_empty_both() {
+        assert_eq!(levenshtein("", ""), 0);
+    }
+
+    // ─── compare_signatures ───
+
+    #[test]
+    fn compare_signatures_identical_is_100() {
+        assert_eq!(compare_signatures("abcdef", "abcdef"), 100);
+    }
+
+    #[test]
+    fn compare_signatures_empty_is_zero() {
+        assert_eq!(compare_signatures("", "abc"), 0);
+        assert_eq!(compare_signatures("abc", ""), 0);
+    }
+
+    #[test]
+    fn compare_signatures_one_char_diff_high() {
+        // 5 chars, 1 substitution -> 80% similarity.
+        assert_eq!(compare_signatures("abcde", "abcdf"), 80);
+    }
+
+    // ─── FuzzySignature / MatchScore wiring ───
+
+    #[test]
+    fn fuzzy_match_exact_sha256() {
+        let candidate = FuzzySignature {
+            sha256: "deadbeef".to_string(),
+            ssdeep: None,
+            imphash: None,
+            file_type: FileType::Unknown,
+            file_size: 0,
+        };
+        let db = vec![FuzzySignature {
+            sha256: "deadbeef".to_string(),
+            ssdeep: None,
+            imphash: None,
+            file_type: FileType::Unknown,
+            file_size: 0,
+        }];
+        let score = FuzzyHasher::fuzzy_match(&candidate, &db);
+        assert!(score.sha256_match);
+        assert_eq!(score.method, MatchMethod::ExactSha256);
+    }
+
+    #[test]
+    fn fuzzy_match_no_match_returns_none() {
+        let candidate = FuzzySignature {
+            sha256: "aaaa".to_string(),
+            ssdeep: None,
+            imphash: None,
+            file_type: FileType::Unknown,
+            file_size: 0,
+        };
+        let db = vec![FuzzySignature {
+            sha256: "bbbb".to_string(),
+            ssdeep: None,
+            imphash: None,
+            file_type: FileType::Unknown,
+            file_size: 0,
+        }];
+        let score = FuzzyHasher::fuzzy_match(&candidate, &db);
+        assert!(!score.sha256_match);
+        assert_eq!(score.method, MatchMethod::None);
+    }
 }

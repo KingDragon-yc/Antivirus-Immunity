@@ -81,21 +81,20 @@ impl Logger {
         }
 
         // Check rotation
-        if let Ok(metadata) = fs::metadata(&self.current_log) {
-            if metadata.len() > MAX_LOG_SIZE {
-                let _ = self.rotate();
-            }
+        if let Ok(metadata) = fs::metadata(&self.current_log)
+            && metadata.len() > MAX_LOG_SIZE
+        {
+            let _ = self.rotate();
         }
 
         // Serialize to JSONL
-        if let Ok(json) = serde_json::to_string(event) {
-            if let Ok(mut file) = OpenOptions::new()
+        if let Ok(json) = serde_json::to_string(event)
+            && let Ok(mut file) = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&self.current_log)
-            {
-                let _ = writeln!(file, "{}", json);
-            }
+        {
+            let _ = writeln!(file, "{}", json);
         }
     }
 

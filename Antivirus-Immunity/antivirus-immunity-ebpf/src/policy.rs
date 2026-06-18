@@ -229,21 +229,21 @@ impl PolicyEngine {
     ) -> PolicyVerdict {
         // Check blacklisted ports
         for rule in &self.blacklist_networks {
-            if let Some(port) = rule.port {
-                if port == dst_port {
-                    return PolicyVerdict {
-                        action: if self.mode == "enforce" {
-                            ResponseAction::BlockAccess
-                        } else {
-                            ResponseAction::Monitor
-                        },
-                        severity: Severity::Critical,
-                        reason: format!(
-                            "{}:{} — {}: {}",
-                            dst_addr, dst_port, rule.description, event.comm,
-                        ),
-                    };
-                }
+            if let Some(port) = rule.port
+                && port == dst_port
+            {
+                return PolicyVerdict {
+                    action: if self.mode == "enforce" {
+                        ResponseAction::BlockAccess
+                    } else {
+                        ResponseAction::Monitor
+                    },
+                    severity: Severity::Critical,
+                    reason: format!(
+                        "{}:{} — {}: {}",
+                        dst_addr, dst_port, rule.description, event.comm,
+                    ),
+                };
             }
         }
 

@@ -1,33 +1,33 @@
 [package]
 name = "antivirus-immunity-core"
 version = "0.4.1"
-edition = "2021"
+edition = "2024"
 description = "An antivirus engine inspired by the biological immune system, with local AI cortex"
 authors = ["KingDragon-yc"]
 
 [dependencies]
 antivirus-immunity-common = { path = "../antivirus-immunity-common" }
 
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 anyhow = "1.0"
-clap = { version = "4.0", features = ["derive"] }
-sha2 = "0.10"
+clap = { version = "4.6", features = ["derive"] }
+sha2 = "0.11"
 hex = "0.4"
 yara-x = "1.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-lru = "0.12"
-reqwest = { version = "0.12", features = ["json"] }
-sysinfo = "0.31"
-uuid = { version = "1.0", features = ["v4"] }
+lru = "0.18"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "webpki-roots", "http2"] }
+sysinfo = "0.39"
+uuid = { version = "1.23", features = ["v4"] }
 
 # Fuzzy hashing: CTPH (Ssdeep-like) pure Rust + Imphash (PE/ELF import table)
-pelite = "0.6"
-goblin = "0.9"
+pelite = "0.10"
+goblin = "0.10"
 
 [dependencies.windows]
-version = "0.52"
+version = "0.57"
 features = [
     "Win32_Foundation",
     "Win32_System_Threading",

@@ -141,12 +141,12 @@ impl MemoryBCell {
         };
 
         // Compute fuzzy hashes from the file
-        if let Some(p) = path {
-            if let Some(fuzzy) = FuzzyHasher::compute_all(p) {
-                record.ssdeep = fuzzy.ssdeep;
-                record.imphash = fuzzy.imphash;
-                record.file_type = fuzzy.file_type.as_str().to_string();
-            }
+        if let Some(p) = path
+            && let Some(fuzzy) = FuzzyHasher::compute_all(p)
+        {
+            record.ssdeep = fuzzy.ssdeep;
+            record.imphash = fuzzy.imphash;
+            record.file_type = fuzzy.file_type.as_str().to_string();
         }
 
         self.signatures.push(record);
@@ -175,7 +175,7 @@ impl MemoryBCell {
                     ssdeep_similarity: None,
                     imphash_match: false,
                     method: MatchMethod::None,
-                }
+                };
             }
         };
 
@@ -269,10 +269,10 @@ impl ImmuneSystem {
         println!("[*] Learning phase active. Building fuzzy immune memory...");
         let mut count = 0;
         for p in processes {
-            if let Some(hash) = &p.hash {
-                if self.memory_b_cell.learn(hash.clone(), p.path.as_deref()) {
-                    count += 1;
-                }
+            if let Some(hash) = &p.hash
+                && self.memory_b_cell.learn(hash.clone(), p.path.as_deref())
+            {
+                count += 1;
             }
         }
 
@@ -300,21 +300,17 @@ impl ImmuneSystem {
         // ========================================
         // LAYER 1: YARA Scan (Antigen Detection — Blacklist)
         // ========================================
-        if let Some(rules) = &self.yara_rules {
-            if let Some(path) = &process.path {
-                if let Ok(scan_results) = Scanner::new(rules).scan_file(path) {
-                    let matching_rules: Vec<_> = scan_results.matching_rules().collect();
-                    if !matching_rules.is_empty() {
-                        let names: Vec<String> = matching_rules
-                            .iter()
-                            .map(|r| r.identifier().to_string())
-                            .collect();
-                        return Assessment::Critical(format!(
-                            "Antigen Detected: {}",
-                            names.join(", ")
-                        ));
-                    }
-                }
+        if let Some(rules) = &self.yara_rules
+            && let Some(path) = &process.path
+            && let Ok(scan_results) = Scanner::new(rules).scan_file(path)
+        {
+            let matching_rules: Vec<_> = scan_results.matching_rules().collect();
+            if !matching_rules.is_empty() {
+                let names: Vec<String> = matching_rules
+                    .iter()
+                    .map(|r| r.identifier().to_string())
+                    .collect();
+                return Assessment::Critical(format!("Antigen Detected: {}", names.join(", ")));
             }
         }
 
@@ -353,22 +349,22 @@ impl ImmuneSystem {
         // ========================================
         // LAYER 3: SHA256 Exact Match (Fast Path)
         // ========================================
-        if let Some(hash) = &process.hash {
-            if self.memory_b_cell.is_trusted(hash) {
-                if matches!(
-                    path_verdict,
-                    PathVerdict::Verified | PathVerdict::TrustedLocation
-                ) {
-                    return Assessment::Safe;
-                }
-                if let PathVerdict::UnknownLocation { ref path } = path_verdict {
-                    return Assessment::NeedsAiReview(format!(
-                        "Trusted hash but running from unusual location: {}",
-                        path
-                    ));
-                }
+        if let Some(hash) = &process.hash
+            && self.memory_b_cell.is_trusted(hash)
+        {
+            if matches!(
+                path_verdict,
+                PathVerdict::Verified | PathVerdict::TrustedLocation
+            ) {
                 return Assessment::Safe;
             }
+            if let PathVerdict::UnknownLocation { ref path } = path_verdict {
+                return Assessment::NeedsAiReview(format!(
+                    "Trusted hash but running from unusual location: {}",
+                    path
+                ));
+            }
+            return Assessment::Safe;
         }
 
         // ========================================
@@ -461,13 +457,13 @@ impl ImmuneSystem {
     }
 
     pub fn get_yara_matches(&self, file_path: &str) -> Vec<String> {
-        if let Some(rules) = &self.yara_rules {
-            if let Ok(results) = Scanner::new(rules).scan_file(file_path) {
-                return results
-                    .matching_rules()
-                    .map(|r| r.identifier().to_string())
-                    .collect();
-            }
+        if let Some(rules) = &self.yara_rules
+            && let Ok(results) = Scanner::new(rules).scan_file(file_path)
+        {
+            return results
+                .matching_rules()
+                .map(|r| r.identifier().to_string())
+                .collect();
         }
         Vec::new()
     }

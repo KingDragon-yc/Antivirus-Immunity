@@ -1,6 +1,6 @@
 use anyhow::Result;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
-use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 
 /// RAII wrapper for process handle safety
 struct ProcessHandle(HANDLE);
