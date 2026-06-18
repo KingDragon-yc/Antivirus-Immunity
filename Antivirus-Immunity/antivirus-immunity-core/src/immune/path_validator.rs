@@ -23,6 +23,44 @@ const TRUSTED_SYSTEM_DIRS: &[&str] = &[
 
 const TRUSTED_PROGRAM_DIRS: &[&str] = &[r"C:\Program Files", r"C:\Program Files (x86)"];
 
+/// Subdirectories under the Windows tree that are writable by standard users
+/// (or otherwise commonly abused for LOLBin / AppLocker-bypass execution).
+/// A binary running from one of these is NOT trusted just because it lives
+/// under `C:\Windows` — these carve-outs are checked before the trusted-dir
+/// match so malware dropped here is surfaced as `UnknownLocation`.
+const WRITABLE_WINDOWS_SUBDIRS: &[&str] = &[
+    r"C:\Windows\Temp",
+    r"C:\Windows\Tasks",
+    r"C:\Windows\tracing",
+    r"C:\Windows\debug",
+    r"C:\Windows\System32\Tasks",
+    r"C:\Windows\System32\spool\drivers\color",
+    r"C:\Windows\registration\crmlog",
+    r"C:\Windows\System32\com\dmp",
+    r"C:\Windows\System32\spool\PRINTERS",
+];
+
+/// Path-boundary-aware containment check.
+///
+/// Returns true only when `dir` is `base` itself or a true subdirectory of it.
+/// A plain `starts_with` would incorrectly treat `C:\WindowsApps\evil` or
+/// `C:\Windows-x\evil` as living under `C:\Windows`; this requires the next
+/// character after the base to be a path separator.
+fn is_within(dir: &str, base: &str) -> bool {
+    let dir = dir.to_lowercase();
+    let dir = dir.trim_end_matches(['\\', '/']);
+    let base = base.to_lowercase();
+    let base = base.trim_end_matches(['\\', '/']);
+
+    if dir == base {
+        return true;
+    }
+    if let Some(rest) = dir.strip_prefix(base) {
+        return rest.starts_with('\\') || rest.starts_with('/');
+    }
+    false
+}
+
 /// Maps well-known system process names to their expected parent directories.
 /// If a process has one of these names but is NOT located in the expected
 /// directory, it's flagged as a high-confidence imposter.
@@ -109,22 +147,35 @@ impl PathValidator {
             }
         }
 
-        // 2. Check if in any trusted directory
+        // 2. Reject known user-writable carve-outs under the Windows tree first.
+        // These live under C:\Windows but are writable by standard users and are
+        // common malware drop / LOLBin locations, so they must NOT inherit the
+        // trust of the surrounding system directories.
+        let in_writable_carveout = WRITABLE_WINDOWS_SUBDIRS
+            .iter()
+            .any(|dir| is_within(&parent_dir, dir));
+        if in_writable_carveout {
+            return PathVerdict::UnknownLocation {
+                path: path_str.to_string(),
+            };
+        }
+
+        // 3. Check if in any trusted directory (path-boundary aware)
         let in_trusted_system = TRUSTED_SYSTEM_DIRS
             .iter()
-            .any(|dir| parent_dir.to_lowercase().starts_with(&dir.to_lowercase()));
+            .any(|dir| is_within(&parent_dir, dir));
         if in_trusted_system {
             return PathVerdict::TrustedLocation;
         }
 
         let in_trusted_program = TRUSTED_PROGRAM_DIRS
             .iter()
-            .any(|dir| parent_dir.to_lowercase().starts_with(&dir.to_lowercase()));
+            .any(|dir| is_within(&parent_dir, dir));
         if in_trusted_program {
             return PathVerdict::TrustedLocation;
         }
 
-        // 3. Unknown location — not inherently bad, but notable
+        // 4. Unknown location — not inherently bad, but notable
         PathVerdict::UnknownLocation {
             path: path_str.to_string(),
         }
@@ -166,5 +217,31 @@ mod tests {
         let v = PathValidator::new();
         let result = v.validate("sketchy.exe", Some(r"C:\Temp\sketchy.exe"));
         assert!(matches!(result, PathVerdict::UnknownLocation { .. }));
+    }
+
+    #[test]
+    fn test_writable_windows_subdir_not_trusted() {
+        let v = PathValidator::new();
+        // A binary dropped in C:\Windows\Temp must not inherit Windows-tree trust.
+        let result = v.validate("dropper.exe", Some(r"C:\Windows\Temp\dropper.exe"));
+        assert!(matches!(result, PathVerdict::UnknownLocation { .. }));
+
+        let result = v.validate("evil.exe", Some(r"C:\Windows\Tasks\evil.exe"));
+        assert!(matches!(result, PathVerdict::UnknownLocation { .. }));
+    }
+
+    #[test]
+    fn test_path_boundary_not_prefix_matched() {
+        let v = PathValidator::new();
+        // C:\WindowsApps and C:\Windows-x must NOT be treated as inside C:\Windows.
+        let result = v.validate("app.exe", Some(r"C:\Windows-x\app.exe"));
+        assert!(matches!(result, PathVerdict::UnknownLocation { .. }));
+    }
+
+    #[test]
+    fn test_real_system32_still_trusted() {
+        let v = PathValidator::new();
+        let result = v.validate("notepad.exe", Some(r"C:\Windows\System32\notepad.exe"));
+        assert!(matches!(result, PathVerdict::TrustedLocation));
     }
 }

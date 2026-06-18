@@ -59,8 +59,10 @@ impl TollLikeReceptor {
             let handle = SafeHandle::new(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)?)
                 .ok_or_else(|| anyhow::anyhow!("Failed to create process snapshot"))?;
 
-            let mut entry = PROCESSENTRY32::default();
-            entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+            let mut entry = PROCESSENTRY32 {
+                dwSize: std::mem::size_of::<PROCESSENTRY32>() as u32,
+                ..Default::default()
+            };
 
             if Process32First(handle.raw(), &mut entry).is_ok() {
                 loop {
@@ -99,8 +101,10 @@ impl TollLikeReceptor {
             let handle = SafeHandle::new(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)?)
                 .ok_or_else(|| anyhow::anyhow!("Failed to create snapshot for diff"))?;
 
-            let mut entry = PROCESSENTRY32::default();
-            entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+            let mut entry = PROCESSENTRY32 {
+                dwSize: std::mem::size_of::<PROCESSENTRY32>() as u32,
+                ..Default::default()
+            };
 
             if Process32First(handle.raw(), &mut entry).is_ok() {
                 loop {

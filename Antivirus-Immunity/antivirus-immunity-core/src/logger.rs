@@ -45,6 +45,8 @@ pub enum EventType {
 pub struct Logger {
     log_dir: PathBuf,
     current_log: PathBuf,
+    /// When true, file logging is unavailable and events are silently dropped.
+    disabled: bool,
 }
 
 impl Logger {
@@ -57,11 +59,27 @@ impl Logger {
         Ok(Self {
             log_dir,
             current_log,
+            disabled: false,
         })
+    }
+
+    /// Construct a no-op logger that drops all events. Used as a graceful
+    /// fallback when the log directory cannot be created, so the engine keeps
+    /// running instead of panicking.
+    pub fn disabled() -> Self {
+        Self {
+            log_dir: PathBuf::from(LOG_DIR),
+            current_log: PathBuf::from(LOG_DIR).join("immunity.jsonl"),
+            disabled: true,
+        }
     }
 
     /// Log a security event
     pub fn log(&self, event: &SecurityEvent) {
+        if self.disabled {
+            return;
+        }
+
         // Check rotation
         if let Ok(metadata) = fs::metadata(&self.current_log) {
             if metadata.len() > MAX_LOG_SIZE {

@@ -12,11 +12,10 @@
 #![cfg(target_os = "linux")]
 
 use crate::probe::{ProbeType, RawProbeEvent};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashSet;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::time::Duration;
 
 // ─── Netlink constants ───
 const NETLINK_CONNECTOR: i32 = 11;
@@ -68,7 +67,7 @@ struct CnMsg {
     id: CbId,
     seq: u32,
     ack: u32,
-    len: u16,   // Length of payload data
+    len: u16, // Length of payload data
     flags: u16,
 }
 
@@ -121,7 +120,7 @@ impl NetlinkConnector {
         let fd = unsafe { OwnedFd::from_raw_fd(sock) };
 
         // Bind to any port, subscribe to CN_IDX_PROC group
-        let mut addr = SockAddrNl {
+        let addr = SockAddrNl {
             nl_family: libc::AF_NETLINK as libc::sa_family_t,
             nl_pad: 0,
             nl_pid: 0,    // Kernel assigns a port
@@ -210,7 +209,8 @@ impl NetlinkConnector {
             );
             std::ptr::copy_nonoverlapping(
                 &payload as *const u32 as *const u8,
-                buf.as_mut_ptr().add(NLMSG_OVERHEAD + std::mem::size_of::<CnMsg>()),
+                buf.as_mut_ptr()
+                    .add(NLMSG_OVERHEAD + std::mem::size_of::<CnMsg>()),
                 std::mem::size_of::<u32>(),
             );
         }
@@ -289,6 +289,16 @@ impl NetlinkConnector {
             }
 
             let received = n as usize;
+
+            // P0 安全检查:connector 消息必须来自内核(nl_pid == 0)。
+            // 本地非特权进程(或具备 CAP_NET_ADMIN 的进程)也能向本 socket
+            // 发送伪造的 PROC_EVENT_* 消息,从而触发引擎对任意 PID 发出
+            // SIGSTOP/SIGKILL —— 这构成权限提升 / DoS 原语(让安全引擎去
+            // 杀掉防病毒自身或关键服务)。任何非内核来源的消息一律丢弃。
+            if addr.nl_pid != 0 {
+                continue;
+            }
+
             if received < NLMSG_OVERHEAD {
                 break;
             }
@@ -296,9 +306,7 @@ impl NetlinkConnector {
             // Parse all nlmsghdr-delimited messages in the buffer
             let mut offset = 0usize;
             while offset + NLMSG_OVERHEAD <= received {
-                let hdr = unsafe {
-                    &*(buf.as_ptr().add(offset) as *const NlMsgHdr)
-                };
+                let hdr = unsafe { &*(buf.as_ptr().add(offset) as *const NlMsgHdr) };
                 let msg_len = hdr.nlmsg_len as usize;
                 if msg_len < NLMSG_OVERHEAD || offset + msg_len > received {
                     break;
@@ -309,9 +317,7 @@ impl NetlinkConnector {
                         // Parse cn_msg + proc_event
                         let cn_offset = offset + NLMSG_OVERHEAD;
                         if cn_offset + std::mem::size_of::<CnMsg>() <= received {
-                            let cn = unsafe {
-                                &*(buf.as_ptr().add(cn_offset) as *const CnMsg)
-                            };
+                            let cn = unsafe { &*(buf.as_ptr().add(cn_offset) as *const CnMsg) };
                             if cn.id.idx == CN_IDX_PROC && cn.id.val == CN_VAL_PROC {
                                 let data_offset = cn_offset + std::mem::size_of::<CnMsg>();
                                 let data_len = cn.len as usize;
@@ -428,7 +434,7 @@ impl NetlinkConnector {
                 if payload.len() < 16 {
                     return None;
                 }
-                let pid = u32::from_ne_bytes(payload[0..4].try_into().ok()?) as u32;
+                let pid = u32::from_ne_bytes(payload[0..4].try_into().ok()?);
                 let uid = u32::from_ne_bytes(payload[8..12].try_into().ok()?);
                 Some(RawProbeEvent {
                     pid,
@@ -444,43 +450,44 @@ impl NetlinkConnector {
                     ns_pid: pid,
                 })
             }
-            PROC_EVENT_NONE | _ => None,
+            // Any other event type (including PROC_EVENT_NONE and GID which
+            // we don't enrich here) is ignored.
+            _ => None,
         }
     }
 
     // ─── /proc helpers (used to enrich bare PID events) ───
+    //
+    // These now delegate to `crate::procfs` so the /proc parsing logic lives
+    // in exactly one place and shares the same comm-aware /proc/<pid>/stat
+    // parser (which correctly handles process names containing spaces or
+    // parentheses — see procfs::parse_ppid).
 
     fn read_proc_comm(pid: u32) -> String {
-        std::fs::read_to_string(format!("/proc/{}/comm", pid))
-            .unwrap_or_default()
-            .trim()
-            .to_string()
+        crate::procfs::read_comm(pid)
     }
 
     fn read_proc_exe(pid: u32) -> String {
-        std::fs::read_link(format!("/proc/{}/exe", pid))
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
+        crate::procfs::read_exe(pid)
     }
 
     fn read_proc_ppid(pid: u32) -> u32 {
-        std::fs::read_to_string(format!("/proc/{}/stat", pid))
-            .ok()
-            .and_then(|s| {
-                let parts: Vec<&str> = s.splitn(5, ' ').collect();
-                parts.get(3)?.parse().ok()
-            })
-            .unwrap_or(0)
+        crate::procfs::read_ppid(pid)
     }
 
     fn read_proc_cgroup_id(pid: u32) -> u64 {
+        // NOTE: hashing the cgroup path with DefaultHasher is not stable across
+        // runs/processes (its seed is randomized) and is only suitable as a
+        // best-effort de-duplication key within a single process lifetime.
+        // Replacing it with a true bpf_get_current_cgroup_id()-style value is
+        // tracked separately (P1).
         std::fs::read_to_string(format!("/proc/{}/cgroup", pid))
             .ok()
-            .and_then(|s| {
+            .map(|s| {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 s.hash(&mut hasher);
-                Some(hasher.finish())
+                hasher.finish()
             })
             .unwrap_or(0)
     }

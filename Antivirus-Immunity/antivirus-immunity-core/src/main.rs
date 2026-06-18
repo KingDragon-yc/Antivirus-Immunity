@@ -7,18 +7,40 @@ use chrono::Utc;
 use clap::Parser;
 use effector::cytotoxic_t_cell::{CytotoxicTCell, ResponseAction};
 use effector::quarantine::Quarantine;
-use immune::ai_cortex::{AiCortex, AiCortexConfig, ProcessContext};
+use immune::{AiCortex, AiCortexConfig, ProcessContext};
 use immune::{Assessment, DangerTheoryEngine, ImmuneSystem};
 use logger::{EventType, Logger, SecurityEvent};
 use receptor::toll_like_receptor::TollLikeReceptor;
 use std::time::Duration;
 use tokio::time::sleep;
 
+/// Truncate a string to at most `max` characters on a UTF-8 char boundary.
+///
+/// Thin wrapper over the shared [`antivirus_immunity_common::safety::truncate_chars`]
+/// so the UTF-8-safe truncation logic lives in one place. Process paths and AI
+/// reasoning routinely contain non-ASCII text (e.g. CJK); plain byte slicing
+/// (`&s[..n]`) would panic on a multi-byte boundary.
+fn truncate_chars(s: &str, max: usize) -> &str {
+    antivirus_immunity_common::safety::truncate_chars(s, max)
+}
+
+/// Decide whether an AI-recommended destructive action may run autonomously.
+///
+/// Delegates to the shared [`antivirus_immunity_common::safety::ai_destructive_allowed_by_verdict`]
+/// so the Windows core and Linux ebpf engines enforce the same confidence
+/// floor (0.8) and the same "do not auto-destroy trusted system locations"
+/// rule. `path_verdict` here is the Debug form of `PathVerdict`
+/// ("Verified"/"TrustedLocation"/...); the ebpf engine instead passes the raw
+/// executable path to the `_by_path` variant.
+fn ai_destructive_allowed(confidence: f64, path_verdict: &str) -> bool {
+    antivirus_immunity_common::safety::ai_destructive_allowed_by_verdict(confidence, path_verdict)
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "antivirus-immunity-core",
     author = "KingDragon-yc",
-    version = "0.3.0",
+    version = "0.4.1",
     about = "An antivirus engine inspired by the biological immune system, with local AI cortex",
     long_about = "Antivirus-Immunity combines AIS (Artificial Immune System) theory with \
                   local AI inference to provide behavior-based endpoint security."
@@ -53,13 +75,15 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // Initialize Logger
+    // Initialize Logger. If the log directory cannot be created (e.g. read-only
+    // filesystem or insufficient permissions), fall back to an in-memory logger
+    // that drops events rather than re-trying the same failing call and panicking.
     let logger = Logger::new().unwrap_or_else(|e| {
         eprintln!(
             "[!] Failed to initialize logger: {}. Continuing without file logging.",
             e
         );
-        Logger::new().unwrap() // retry
+        Logger::disabled()
     });
 
     // Determine Policy
@@ -78,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!();
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║          Antivirus-Immunity Core v0.3.0                     ║");
+    println!("║          Antivirus-Immunity Core v0.4.1                     ║");
     println!("║          Biological Architecture + AI Cortex                ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
@@ -92,15 +116,15 @@ async fn main() -> anyhow::Result<()> {
                 println!("    (No files currently in quarantine)");
             } else {
                 println!(
-                    "{:<38} {:<30} {:<20} {}",
-                    "ID", "ORIGINAL PATH", "PROCESS", "DATE"
+                    "{:<38} {:<30} {:<20} DATE",
+                    "ID", "ORIGINAL PATH", "PROCESS"
                 );
                 println!("{:-<38} {:-<30} {:-<20} {:-<20}", "", "", "", "");
                 for entry in active {
                     println!(
                         "{:<38} {:<30} {:<20} {}",
                         entry.id,
-                        &entry.original_path[..entry.original_path.len().min(28)],
+                        truncate_chars(&entry.original_path, 28),
                         entry.process_name,
                         entry.quarantined_at.format("%Y-%m-%d %H:%M:%S"),
                     );
@@ -255,11 +279,27 @@ async fn main() -> anyhow::Result<()> {
 
                     // ===== AI CORTEX DEEP ANALYSIS =====
                     if needs_ai && ai_cortex.is_available() {
+                        // ProcessContext is now the shared common type; fields the
+                        // Windows engine doesn't populate (container_id, parent
+                        // chain, network/file activity, cmdline) are left as
+                        // defaults — the common build_prompt renders them as
+                        // N/A / None.
                         let ctx = ProcessContext {
                             pid: p.pid,
                             name: p.name.clone(),
                             path: p.path.clone(),
                             hash: p.hash.clone(),
+                            cmdline: None,
+                            container_id: None,
+                            parent_chain: Vec::new(),
+                            network_activity: Vec::new(),
+                            file_access: Vec::new(),
+                            danger_level: format!("{:?}", current_danger),
+                            is_known_hash: p
+                                .hash
+                                .as_deref()
+                                .map(|h| immune_system.is_hash_trusted(h))
+                                .unwrap_or(false),
                             path_verdict: immune_system
                                 .get_path_verdict_string(&p.name, p.path.as_deref()),
                             yara_matches: p
@@ -267,12 +307,6 @@ async fn main() -> anyhow::Result<()> {
                                 .as_deref()
                                 .map(|path| immune_system.get_yara_matches(path))
                                 .unwrap_or_default(),
-                            danger_level: format!("{:?}", current_danger),
-                            is_known_hash: p
-                                .hash
-                                .as_deref()
-                                .map(|h| immune_system.is_hash_trusted(h))
-                                .unwrap_or(false),
                         };
 
                         print!("    🧠 AI Cortex analyzing... ");
@@ -285,7 +319,7 @@ async fn main() -> anyhow::Result<()> {
                                 );
                                 println!(
                                     "       Reasoning: {}",
-                                    &verdict.reasoning[..verdict.reasoning.len().min(100)]
+                                    truncate_chars(&verdict.reasoning, 100)
                                 );
                                 println!("       Recommendation: {}", verdict.recommendation);
 
@@ -304,8 +338,36 @@ async fn main() -> anyhow::Result<()> {
                                     danger_level: Some(format!("{:?}", current_danger)),
                                 });
 
-                                // Act on AI recommendation if in active mode
-                                if active_defense && verdict.recommendation == "TERMINATE" {
+                                // Act on AI recommendation if in active mode.
+                                // Destructive actions are gated: a low-confidence
+                                // verdict, or one targeting a trusted/verified
+                                // system location, is logged for review instead of
+                                // executed, to bound the blast radius of a model
+                                // false positive.
+                                let destructive_ok =
+                                    ai_destructive_allowed(verdict.confidence, &ctx.path_verdict);
+                                let wants_destructive = verdict.recommendation == "TERMINATE"
+                                    || verdict.recommendation == "QUARANTINE";
+
+                                if active_defense && wants_destructive && !destructive_ok {
+                                    println!(
+                                        "    [⚠] AI recommended {} but action SUPPRESSED (confidence {:.0}%, path verdict: {}). Logged for review.",
+                                        verdict.recommendation,
+                                        verdict.confidence * 100.0,
+                                        truncate_chars(&ctx.path_verdict, 40),
+                                    );
+                                    logger.log_action(
+                                        p.pid,
+                                        &p.name,
+                                        "AI_ACTION_SUPPRESSED",
+                                        &format!(
+                                            "{} suppressed (confidence {:.2}, verdict {})",
+                                            verdict.recommendation,
+                                            verdict.confidence,
+                                            ctx.path_verdict,
+                                        ),
+                                    );
+                                } else if active_defense && verdict.recommendation == "TERMINATE" {
                                     print!("    [!!!] AI RECOMMENDS TERMINATION. ACTIVATING CYTOTOXIC T CELLS... ");
                                     match CytotoxicTCell::induce_apoptosis(p.pid) {
                                         Ok(_) => {
@@ -425,7 +487,7 @@ async fn main() -> anyhow::Result<()> {
 
         // Periodic status (every 60 loops)
         loop_count += 1;
-        if loop_count % 60 == 0 {
+        if loop_count.is_multiple_of(60) {
             println!(
                 "\n--- Status: {} | {} ---\n",
                 danger_engine.status_summary(),

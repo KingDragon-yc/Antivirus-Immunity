@@ -37,10 +37,17 @@ pub struct FuzzySignature {
     pub ssdeep: Option<String>,
     pub imphash: Option<String>,
     pub file_type: FileType,
+    /// File size in bytes; not currently consumed by the matching pipeline
+    /// but kept on the signature for future heuristics and for callers that
+    /// log it.
+    #[allow(dead_code)]
     pub file_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+// PE / ELF are conventional file-format acronyms; keep them uppercase
+// rather than the clippy-preferred `Pe` / `Elf`.
+#[allow(clippy::upper_case_acronyms)]
 pub enum FileType {
     PE,
     ELF,
@@ -59,6 +66,10 @@ impl FileType {
 
 #[derive(Debug, Clone)]
 pub struct MatchScore {
+    /// Whether the candidate matched a known signature by exact SHA256.
+    /// Currently implied by `method == ExactSha256`; the flag is kept for
+    /// callers that want a quick boolean without matching on `method`.
+    #[allow(dead_code)]
     pub sha256_match: bool,
     pub ssdeep_similarity: Option<u32>, // 0–100, ≥80 → same family
     pub imphash_match: bool,
@@ -105,10 +116,7 @@ impl FuzzyHasher {
 
     /// Compare a candidate signature against a database of known signatures.
     /// Returns the best match (if any) with the match method and score.
-    pub fn fuzzy_match(
-        candidate: &FuzzySignature,
-        database: &[FuzzySignature],
-    ) -> MatchScore {
+    pub fn fuzzy_match(candidate: &FuzzySignature, database: &[FuzzySignature]) -> MatchScore {
         let mut best = MatchScore {
             sha256_match: false,
             ssdeep_similarity: None,
@@ -175,12 +183,6 @@ impl FuzzyHasher {
             hasher.update(&buf[..n]);
         }
         Ok(hex::encode(hasher.finalize()))
-    }
-
-    fn hash_bytes(data: &[u8]) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        hex::encode(hasher.finalize())
     }
 
     fn detect_file_type(path: &str) -> FileType {
@@ -289,22 +291,39 @@ fn b64_encode(bits: u64) -> char {
 /// Compute similarity percentage between two ssdeep signatures.
 /// Returns 0–100 where ≥ 80 indicates same file or close variant.
 pub fn ssdeep_similarity(a: &str, b: &str) -> u32 {
-    // Extract signature bodies from "bs:sig1:sig2" format.
-    // Try matching sig1→sig1 and sig2→sig2, take the best.
+    // Signatures are "bs:sig@bs:sig@2bs" as produced by `compute_ssdeep`.
     let a_parts: Vec<&str> = a.split(':').collect();
     let b_parts: Vec<&str> = b.split(':').collect();
 
-    let a_sig1 = a_parts.get(1).copied().unwrap_or(a);
+    let a_bs: u64 = a_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let b_bs: u64 = b_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let a_sig1 = a_parts.get(1).copied().unwrap_or("");
     let a_sig2 = a_parts.get(2).copied().unwrap_or("");
-    let b_sig1 = b_parts.get(1).copied().unwrap_or(b);
+    let b_sig1 = b_parts.get(1).copied().unwrap_or("");
     let b_sig2 = b_parts.get(2).copied().unwrap_or("");
 
-    let sim1 = compare_signatures(a_sig1, b_sig1);
-    let sim2 = compare_signatures(a_sig2, b_sig2);
-    let sim_cross1 = compare_signatures(a_sig1, b_sig2);
-    let sim_cross2 = compare_signatures(a_sig2, b_sig1);
+    // A block size of 0 means the prefix was missing/unparseable — not comparable.
+    if a_bs == 0 || b_bs == 0 {
+        return 0;
+    }
 
-    sim1.max(sim2).max(sim_cross1).max(sim_cross2)
+    // Only signature bands computed at the SAME effective block size are
+    // comparable. Comparing across block sizes (as the previous all-pairs
+    // edit distance did) is meaningless and yields false "same family" hits.
+    // ssdeep keeps two bands (bs and 2*bs) precisely so that files whose target
+    // block size differs by one step can still be compared.
+    let mut best = 0;
+    if a_bs == b_bs {
+        best = best.max(compare_signatures(a_sig1, b_sig1));
+        best = best.max(compare_signatures(a_sig2, b_sig2));
+    }
+    if a_bs == b_bs.saturating_mul(2) {
+        best = best.max(compare_signatures(a_sig1, b_sig2));
+    }
+    if a_bs.saturating_mul(2) == b_bs {
+        best = best.max(compare_signatures(a_sig2, b_sig1));
+    }
+    best
 }
 
 fn compare_signatures(a: &str, b: &str) -> u32 {
@@ -340,10 +359,12 @@ fn levenshtein(s: &str, t: &str) -> usize {
     for i in 1..=n {
         curr[0] = i;
         for j in 1..=m {
-            let cost = if s_chars[i - 1] == t_chars[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            let cost = if s_chars[i - 1] == t_chars[j - 1] {
+                0
+            } else {
+                1
+            };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -377,15 +398,9 @@ fn compute_pe_imphash(path: &str) -> Option<String> {
                         .trim_end_matches(".dll")
                         .to_string();
                     if let Ok(int_iter) = desc.int() {
-                        for import_result in int_iter {
-                            if let Ok(import) = import_result {
-                                if let pelite::pe64::imports::Import::ByName { name, .. } = import {
-                                    entries.push(format!(
-                                        "{}.{}",
-                                        dll,
-                                        name.to_str().unwrap_or("")
-                                    ));
-                                }
+                        for import in int_iter.flatten() {
+                            if let pelite::pe64::imports::Import::ByName { name, .. } = import {
+                                entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
                             }
                         }
                     }
@@ -407,15 +422,9 @@ fn compute_pe_imphash(path: &str) -> Option<String> {
                         .trim_end_matches(".dll")
                         .to_string();
                     if let Ok(int_iter) = desc.int() {
-                        for import_result in int_iter {
-                            if let Ok(import) = import_result {
-                                if let pelite::pe32::imports::Import::ByName { name, .. } = import {
-                                    entries.push(format!(
-                                        "{}.{}",
-                                        dll,
-                                        name.to_str().unwrap_or("")
-                                    ));
-                                }
+                        for import in int_iter.flatten() {
+                            if let pelite::pe32::imports::Import::ByName { name, .. } = import {
+                                entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
                             }
                         }
                     }

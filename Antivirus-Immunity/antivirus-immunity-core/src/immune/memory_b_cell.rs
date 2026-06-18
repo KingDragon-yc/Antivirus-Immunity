@@ -82,29 +82,29 @@ impl MemoryBCell {
         let storage: MemoryBCellStorage = serde_json::from_reader(reader)?;
 
         // V1 migration: convert bare SHA256 hashes to full records
-        if storage.version < 2 || storage.signatures.is_empty() {
-            if !storage.trusted_hashes.is_empty() {
-                println!("[*] Memory B Cell: Migrating V1 database to V2 (fuzzy hash)...");
-                let records: Vec<FuzzySigRecord> = storage
-                    .trusted_hashes
-                    .into_iter()
-                    .map(|sha| FuzzySigRecord {
-                        sha256: sha,
-                        ssdeep: None,
-                        imphash: None,
-                        path: None,
-                        file_type: "Unknown".to_string(),
-                        labeled: "trusted".to_string(),
-                        learned_at: String::new(),
-                    })
-                    .chain(storage.signatures)
-                    .collect();
-                println!(
-                    "[+] Migrated {} records to V2 fuzzy signature format.",
-                    records.len()
-                );
-                return Ok(records);
-            }
+        if (storage.version < 2 || storage.signatures.is_empty())
+            && !storage.trusted_hashes.is_empty()
+        {
+            println!("[*] Memory B Cell: Migrating V1 database to V2 (fuzzy hash)...");
+            let records: Vec<FuzzySigRecord> = storage
+                .trusted_hashes
+                .into_iter()
+                .map(|sha| FuzzySigRecord {
+                    sha256: sha,
+                    ssdeep: None,
+                    imphash: None,
+                    path: None,
+                    file_type: "Unknown".to_string(),
+                    labeled: "trusted".to_string(),
+                    learned_at: String::new(),
+                })
+                .chain(storage.signatures)
+                .collect();
+            println!(
+                "[+] Migrated {} records to V2 fuzzy signature format.",
+                records.len()
+            );
+            return Ok(records);
         }
 
         Ok(storage.signatures)
@@ -302,21 +302,18 @@ impl ImmuneSystem {
         // ========================================
         if let Some(rules) = &self.yara_rules {
             if let Some(path) = &process.path {
-                match Scanner::new(rules).scan_file(path) {
-                    Ok(scan_results) => {
-                        let matching_rules: Vec<_> = scan_results.matching_rules().collect();
-                        if !matching_rules.is_empty() {
-                            let names: Vec<String> = matching_rules
-                                .iter()
-                                .map(|r| r.identifier().to_string())
-                                .collect();
-                            return Assessment::Critical(format!(
-                                "Antigen Detected: {}",
-                                names.join(", ")
-                            ));
-                        }
+                if let Ok(scan_results) = Scanner::new(rules).scan_file(path) {
+                    let matching_rules: Vec<_> = scan_results.matching_rules().collect();
+                    if !matching_rules.is_empty() {
+                        let names: Vec<String> = matching_rules
+                            .iter()
+                            .map(|r| r.identifier().to_string())
+                            .collect();
+                        return Assessment::Critical(format!(
+                            "Antigen Detected: {}",
+                            names.join(", ")
+                        ));
                     }
-                    Err(_) => {}
                 }
             }
         }
@@ -336,12 +333,18 @@ impl ImmuneSystem {
                 ));
             }
             PathVerdict::NoPath => {
-                if process.pid > 4 {
-                    if matches!(danger_level, DangerLevel::High | DangerLevel::Critical) {
-                        return Assessment::Suspicious(
-                            "Unable to determine path during high danger state".to_string(),
-                        );
-                    }
+                // clippy wants to fold this `if` into the match arm as a guard,
+                // but that would change control flow: an unmatched guard falls
+                // through to `_ => {}`, skipping the downstream YARA/fuzzy/danger
+                // layers. Keep the explicit `if` so NoPath continues to evaluate
+                // the rest of the pipeline when the condition is false.
+                #[allow(clippy::collapsible_match)]
+                if process.pid > 4
+                    && matches!(danger_level, DangerLevel::High | DangerLevel::Critical)
+                {
+                    return Assessment::Suspicious(
+                        "Unable to determine path during high danger state".to_string(),
+                    );
                 }
             }
             _ => {}
@@ -384,8 +387,10 @@ impl ImmuneSystem {
                         "Ssdeep {}% similarity to known trusted binary — likely legitimate update",
                         similarity
                     );
-                    if matches!(path_verdict, PathVerdict::Verified | PathVerdict::TrustedLocation)
-                    {
+                    if matches!(
+                        path_verdict,
+                        PathVerdict::Verified | PathVerdict::TrustedLocation
+                    ) {
                         return Assessment::Safe;
                     }
                     return Assessment::NeedsAiReview(reason);
@@ -395,8 +400,10 @@ impl ImmuneSystem {
                     let reason =
                         "Import table matches known trusted software — possible variant or update"
                             .to_string();
-                    if matches!(path_verdict, PathVerdict::Verified | PathVerdict::TrustedLocation)
-                    {
+                    if matches!(
+                        path_verdict,
+                        PathVerdict::Verified | PathVerdict::TrustedLocation
+                    ) {
                         return Assessment::Safe;
                     }
                     return Assessment::NeedsAiReview(reason);
