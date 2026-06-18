@@ -1,7 +1,9 @@
 # 📘 Antivirus-Immunity 使用手册
 
-> **版本**: v0.3.0 | **最后更新**: 2026-03-31  
+> **版本**: v0.4.1 | **最后更新**: 2026-06-18  
 > **适用平台**: Windows 10/11 (x86_64)
+>
+> 本手册描述 `antivirus-immunity-core`（Windows 端点引擎）的用法。Linux 云原生引擎 `antivirus-immunity-ebpf` 是独立二进制,其能力与实现状态见 [README](README.md) 的"实现状态"表(eBPF 探针当前为规划中,运行时实际使用 Netlink Connector)。
 
 ---
 
@@ -30,7 +32,7 @@
 | **CPU** | 双核 | 四核以上（AI 分析需要更多算力） |
 | **内存** | 4GB | 8GB+（Ollama 模型加载需要额外内存） |
 | **磁盘** | 500MB（构建工具链 + 项目） | 5GB+（含 AI 模型文件） |
-| **Rust 工具链** | 1.70+ | latest stable |
+| **Rust 工具链** | 1.85+(edition 2024) | latest stable |
 | **Ollama**（可选） | v0.1+ | latest |
 
 ### 必须安装的软件
@@ -116,15 +118,20 @@ cargo run -- --mode learn
 **这一步做了什么？**  
 免疫系统需要先了解什么是"自己人"。学习模式会：
 - 扫描当前所有正在运行的进程
-- 记录它们的 SHA256 哈希值到 `immunity_db.json`
-- 建立"免疫记忆"，下次遇到这些进程时直接放行
+- 对每个进程计算**三维模糊签名**并存入 `immunity_db.json`(V2 格式)：
+  - **SHA256** — 精确匹配(快速路径)
+  - **Ssdeep (CTPH)** — 上下文触发分段哈希,识别"相似但不完全相同"的变体(≥80% 相似度视为同族)
+  - **Imphash** — 导入表哈希,PE/ELF 文件导入的 API/符号集合的哈希;代码混淆改变 SHA256 但通常改变不了导入表
+- 建立"免疫记忆",下次遇到这些进程(或其相似变体)时直接放行
+
+> 📝 **v0.4 升级**:v0.3 只存 SHA256(一旦文件重新编译就认不出);v0.4 的模糊哈希让"软件更新后仍能识别为可信"成为可能。旧 `immunity_db.json` 会在加载时自动从 V1 迁移到 V2。
 
 > ⚠️ **重要**：请确保学习时你的电脑是"干净的"——没有运行任何恶意软件。否则恶意程序也会被记为"自己人"！
 
 你应该看到类似输出：
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║          Antivirus-Immunity Core v0.3.0                     ║
+║          Antivirus-Immunity Core v0.4.1                     ║
 ║          Biological Architecture + AI Cortex                ║
 ╚══════════════════════════════════════════════════════════════╝
 
@@ -316,6 +323,20 @@ cargo run -- --mode monitor --ai false
 1. 启动时提示 "AI Cortex: Ollama not reachable"
 2. 自动回退到规则引擎判断
 3. 不会崩溃或阻塞
+
+### 🛡️ AI 安全门控（v0.4.1 新增，重要）
+
+本地小模型会"幻觉",而一个误判杀掉 `svchost.exe` 或数据库主进程的代价远大于漏检。因此 v0.4.1 对 AI 建议的**破坏性动作**(TERMINATE / QUARANTINE)施加双重门控:
+
+| 条件 | 行为 |
+|------|------|
+| AI 置信度 `confidence < 0.8` | **拒绝执行**,降级为 SIGCONT 放行 + 记 `AI_ACTION_SUPPRESSED` 日志 |
+| 目标位于可信路径(System32 / Program Files 等) | **拒绝执行**,同上(即使置信度 ≥ 0.8) |
+| 置信度 ≥ 0.8 **且**非可信路径 | 才允许 AI 自主终止/隔离 |
+
+**这意味着**:AI 永远不会自主杀掉位于 Windows 系统目录里的进程。被抑制的动作会写进日志(`action_taken: "AI_ACTION_SUPPRESSED"`),供人工复核。
+
+> 💡 这条规则是跨平台共享的——Linux 端的 `antivirus-immunity-ebpf` 也用同一套门控逻辑(见 `antivirus-immunity-common/src/safety.rs`)。
 
 ---
 
@@ -509,22 +530,26 @@ cargo run -- --mode quarantine-list
 ```
 antivirus-immunity-core/
   quarantine/
-    manifest.json                ← 隔离清单（元数据）
-    a1b2c3d4-e5f6-...           ← 被隔离的文件（UUID 重命名）
-    b2c3d4e5-f6a7-...           ← 被隔离的文件
+    .qdb                         ← 隔离清单(hex 编码的 JSON,记录所有元数据)
+    <uuid>.<原扩展名>.quarantine  ← 被隔离的文件(UUID 重命名 + .quarantine 后缀,防止误执行)
 ```
 
-### 清单文件 (manifest.json)
+> 📝 **v0.4 变更**:v0.3 的隔离用 `fs::rename` 在同卷移动文件;v0.4 改为**基于重命名的隔离**(rename-based isolation)——Windows 允许重命名正在运行的可执行文件,因此即使进程仍在内存中运行,磁盘上的恶意文件已被移走,防止其重新启动。隔离后引擎会终止该进程。
 
-清单记录了每个被隔离文件的完整信息：
-- 原始路径
-- SHA256 哈希
-- 隔离原因
-- 关联的进程名和 PID
-- 隔离时间
-- 当前状态（Active / Released / Deleted）
+### 清单文件 (.qdb)
 
-> ⚠️ **注意**：隔离区中的文件已被重命名且无扩展名，不会被意外执行。但请不要手动修改 `quarantine/` 目录内容。
+`.qdb` 是把 JSON 清单做 hex 编码后存储的文件,记录了每个被隔离文件的完整信息:
+- 原始路径、SHA256 哈希、隔离原因
+- 关联的进程名和 PID、隔离时间
+- 当前状态(Active / Released / Deleted)
+
+### 恢复或删除隔离文件
+
+引擎的 `Quarantine` 类型提供了 `release(id)`(还原到原路径)和 `purge(id)`(永久删除)方法,但**当前 CLI 尚未暴露这两个子命令**。如需恢复:
+1. 用 `--mode quarantine-list` 查看隔离条目的 UUID 和原始路径
+2. 手动将 `quarantine/<uuid>.<ext>.quarantine` 文件复制/移动回原始路径(去掉 `.quarantine` 后缀)
+
+> 未来版本会添加 `--mode quarantine-release <ID>` / `--mode quarantine-purge <ID>` CLI 子命令。
 
 ---
 
@@ -592,11 +617,7 @@ rule My_Custom_Rule {
 
 ### Q4: 被隔离的文件能恢复吗？
 
-**A**: 可以。隔离清单（`quarantine/manifest.json`）记录了每个文件的原始路径。当前版本需要手动恢复：
-1. 查看 `manifest.json` 找到 UUID 和原始路径
-2. 将 `quarantine/<UUID>` 文件重命名并移回原始路径
-
-> 未来版本会添加 `--mode quarantine-release <ID>` 命令。
+**A**: 可以。引擎内部有 `release` / `purge` 方法,但 CLI 暂未暴露子命令。当前需手动恢复:用 `--mode quarantine-list` 查看 UUID 和原始路径,然后把 `quarantine/<uuid>.<ext>.quarantine` 移回原位并去掉 `.quarantine` 后缀。详见上文"隔离区管理"。
 
 ### Q5: CPU 占用高怎么办？
 
@@ -619,7 +640,7 @@ cargo run -- --mode monitor --interval 5000   # 每 5 秒扫描一次
 
 ### Q7: 支持 Linux / macOS 吗？
 
-**A**: 当前版本**仅支持 Windows**。核心的进程监控和终止功能使用了 Windows API（ToolHelp32、OpenProcess 等）。跨平台支持在未来的路线图中。
+**A**: 本手册描述的 `antivirus-immunity-core` **仅支持 Windows**(进程监控用 ToolHelp32,终止用 TerminateProcess)。项目另有 `antivirus-immunity-ebpf` 面向 Linux 云原生场景(进程事件走 Netlink Connector,AI 推迟阻断,容器感知),但 **eBPF 内核探针尚未接入**(规划中,见 README 实现状态表)。macOS 暂不支持。
 
 ### Q8: 危险信号 (Danger Signal) 是什么意思？
 
@@ -661,11 +682,13 @@ cargo run -- --mode monitor --interval 5000   # 每 5 秒扫描一次
 
 想深入了解项目的设计理念？
 
-- **README.md** — 项目总览、架构设计、技术栈
-- **src/immune/ai_cortex.rs** — AI Cortex 模块的设计原则和实现
-- **src/immune/danger_theory.rs** — 危险信号理论的实现
-- **src/immune/path_validator.rs** — MHC 路径验证机制
-- **antigens.yar** — YARA 规则库，了解支持检测的威胁类型
+- **README.md** — 项目总览、架构设计、技术栈、实现状态表
+- **antivirus-immunity-common/src/safety.rs** — AI 破坏性动作门控(置信度阈值 + 可信路径保护)
+- **antivirus-immunity-common/src/ai_cortex.rs** — AI Cortex(Ollama LLM 接口,prompt 注入防护)
+- **antivirus-immunity-core/src/immune/fuzzy_hash.rs** — CTPH(Ssdeep)+ Imphash 模糊哈希引擎
+- **antivirus-immunity-core/src/immune/danger_theory.rs** — 危险信号理论的实现
+- **antivirus-immunity-core/src/immune/path_validator.rs** — MHC 路径验证机制
+- **antigens.yar** — YARA 规则库,了解支持检测的威胁类型
 
 ---
 
