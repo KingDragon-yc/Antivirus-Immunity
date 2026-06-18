@@ -151,7 +151,10 @@ impl TollLikeReceptor {
             .iter()
             .position(|&c| c == 0)
             .unwrap_or(entry.szExeFile.len());
-        String::from_utf8_lossy(&entry.szExeFile[..end]).to_string()
+        // windows 0.57 changed szExeFile from `[u8; N]` to `[i8; N]`, so cast
+        // each byte back to u8 for from_utf8_lossy.
+        let bytes: Vec<u8> = entry.szExeFile[..end].iter().map(|&c| c as u8).collect();
+        String::from_utf8_lossy(&bytes).to_string()
     }
 
     /// Get process path and hash with RAII handle management

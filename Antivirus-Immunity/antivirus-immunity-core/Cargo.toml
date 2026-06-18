@@ -8,26 +8,26 @@ authors = ["KingDragon-yc"]
 [dependencies]
 antivirus-immunity-common = { path = "../antivirus-immunity-common" }
 
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 anyhow = "1.0"
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 sha2 = "0.10"
 hex = "0.4"
 yara-x = "1.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-lru = "0.12"
-reqwest = { version = "0.12", features = ["json"] }
+lru = "0.18"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "webpki-roots", "http2"] }
 sysinfo = "0.31"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.23", features = ["v4"] }
 
 # Fuzzy hashing: CTPH (Ssdeep-like) pure Rust + Imphash (PE/ELF import table)
 pelite = "0.6"
 goblin = "0.9"
 
 [dependencies.windows]
-version = "0.52"
+version = "0.57"
 features = [
     "Win32_Foundation",
     "Win32_System_Threading",
