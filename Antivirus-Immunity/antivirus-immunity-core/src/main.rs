@@ -257,9 +257,9 @@ async fn main() -> anyhow::Result<()> {
                     };
 
                     let info = match &assessment {
-                        Assessment::Critical(ref reason) => reason.clone(),
-                        Assessment::Suspicious(ref reason) => reason.clone(),
-                        Assessment::NeedsAiReview(ref reason) => reason.clone(),
+                        Assessment::Critical(reason) => reason.clone(),
+                        Assessment::Suspicious(reason) => reason.clone(),
+                        Assessment::NeedsAiReview(reason) => reason.clone(),
                         _ => p.hash.clone().unwrap_or_else(|| "-".to_string()),
                     };
 
@@ -368,7 +368,9 @@ async fn main() -> anyhow::Result<()> {
                                         ),
                                     );
                                 } else if active_defense && verdict.recommendation == "TERMINATE" {
-                                    print!("    [!!!] AI RECOMMENDS TERMINATION. ACTIVATING CYTOTOXIC T CELLS... ");
+                                    print!(
+                                        "    [!!!] AI RECOMMENDS TERMINATION. ACTIVATING CYTOTOXIC T CELLS... "
+                                    );
                                     match CytotoxicTCell::induce_apoptosis(p.pid) {
                                         Ok(_) => {
                                             println!("TARGET ELIMINATED.");
@@ -381,47 +383,45 @@ async fn main() -> anyhow::Result<()> {
                                         }
                                         Err(e) => println!("FAILED: {}", e),
                                     }
-                                } else if active_defense && verdict.recommendation == "QUARANTINE" {
-                                    if let Some(ref mut q) = quarantine {
-                                        if let Some(ref path) = p.path {
-                                            print!(
-                                                "    [!] AI RECOMMENDS QUARANTINE. ISOLATING... "
-                                            );
-                                            match q.isolate(
-                                                path,
-                                                p.hash.clone(),
-                                                &verdict.reasoning,
-                                                &p.name,
+                                } else if active_defense
+                                    && verdict.recommendation == "QUARANTINE"
+                                    && let Some(ref mut q) = quarantine
+                                    && let Some(ref path) = p.path
+                                {
+                                    print!("    [!] AI RECOMMENDS QUARANTINE. ISOLATING... ");
+                                    match q.isolate(
+                                        path,
+                                        p.hash.clone(),
+                                        &verdict.reasoning,
+                                        &p.name,
+                                        p.pid,
+                                    ) {
+                                        Ok(entry) => {
+                                            print!("ISOLATED ({}). ", &entry.id[..8]);
+                                            logger.log_action(
                                                 p.pid,
-                                            ) {
-                                                Ok(entry) => {
-                                                    print!("ISOLATED ({}). ", &entry.id[..8]);
+                                                &p.name,
+                                                "QUARANTINE",
+                                                &format!("Isolated: {}", entry.id),
+                                            );
+                                            // After rename-based isolation, kill the process.
+                                            // The on-disk file is already moved; killing prevents
+                                            // the malware from re-launching itself (nowhere to load from).
+                                            print!("KILLING PROCESS... ");
+                                            match CytotoxicTCell::induce_apoptosis(p.pid) {
+                                                Ok(_) => {
+                                                    println!("TARGET ELIMINATED.");
                                                     logger.log_action(
                                                         p.pid,
                                                         &p.name,
-                                                        "QUARANTINE",
-                                                        &format!("Isolated: {}", entry.id),
+                                                        "TERMINATE",
+                                                        "Post-quarantine elimination",
                                                     );
-                                                    // After rename-based isolation, kill the process.
-                                                    // The on-disk file is already moved; killing prevents
-                                                    // the malware from re-launching itself (nowhere to load from).
-                                                    print!("KILLING PROCESS... ");
-                                                    match CytotoxicTCell::induce_apoptosis(p.pid) {
-                                                        Ok(_) => {
-                                                            println!("TARGET ELIMINATED.");
-                                                            logger.log_action(
-                                                                p.pid,
-                                                                &p.name,
-                                                                "TERMINATE",
-                                                                "Post-quarantine elimination",
-                                                            );
-                                                        }
-                                                        Err(e) => println!("FAILED: {}", e),
-                                                    }
                                                 }
                                                 Err(e) => println!("FAILED: {}", e),
                                             }
                                         }
+                                        Err(e) => println!("FAILED: {}", e),
                                     }
                                 }
                             }
@@ -442,7 +442,7 @@ async fn main() -> anyhow::Result<()> {
                     match action {
                         ResponseAction::QuarantineAndTerminate => {
                             // Quarantine first, then kill
-                            if let (Some(ref mut q), Some(ref path)) = (&mut quarantine, &p.path) {
+                            if let (Some(q), Some(path)) = (&mut quarantine, &p.path) {
                                 print!("    [!!!] QUARANTINING & ELIMINATING... ");
                                 match q.isolate(path, p.hash.clone(), &info, &p.name, p.pid) {
                                     Ok(entry) => {

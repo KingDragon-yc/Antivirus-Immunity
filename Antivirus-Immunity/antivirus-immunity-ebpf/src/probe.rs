@@ -87,7 +87,9 @@ impl ProbeManager {
                     "[+] ProbeManager: Netlink Connector initialized (zero-polling process events)"
                 );
             } else {
-                println!("[!] ProbeManager: Netlink Connector unavailable, falling back to /proc polling");
+                println!(
+                    "[!] ProbeManager: Netlink Connector unavailable, falling back to /proc polling"
+                );
             }
         }
 

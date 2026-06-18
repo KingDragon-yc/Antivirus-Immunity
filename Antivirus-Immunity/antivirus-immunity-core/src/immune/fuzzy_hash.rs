@@ -136,7 +136,7 @@ impl FuzzyHasher {
             }
 
             // ── Ssdeep similarity ──
-            if let (Some(ref c_ss), Some(ref k_ss)) = (&candidate.ssdeep, &known.ssdeep) {
+            if let (Some(c_ss), Some(k_ss)) = (&candidate.ssdeep, &known.ssdeep) {
                 let sim = ssdeep_similarity(c_ss, k_ss);
                 if sim > best.ssdeep_similarity.unwrap_or(0) {
                     best.ssdeep_similarity = Some(sim);
@@ -145,25 +145,25 @@ impl FuzzyHasher {
             }
 
             // ── Imphash match ──
-            if let (Some(ref c_im), Some(ref k_im)) = (&candidate.imphash, &known.imphash) {
-                if c_im == k_im {
-                    best.imphash_match = true;
-                    if best.method != MatchMethod::Ssdeep(0) {
-                        best.method = MatchMethod::Imphash;
-                    }
+            if let (Some(c_im), Some(k_im)) = (&candidate.imphash, &known.imphash)
+                && c_im == k_im
+            {
+                best.imphash_match = true;
+                if best.method != MatchMethod::Ssdeep(0) {
+                    best.method = MatchMethod::Imphash;
                 }
             }
         }
 
         // If ssdeep similarity is below threshold, don't report it as a match
-        if let MatchMethod::Ssdeep(sim) = best.method {
-            if sim < 80 {
-                best.method = if best.imphash_match {
-                    MatchMethod::Imphash
-                } else {
-                    MatchMethod::None
-                };
-            }
+        if let MatchMethod::Ssdeep(sim) = best.method
+            && sim < 80
+        {
+            best.method = if best.imphash_match {
+                MatchMethod::Imphash
+            } else {
+                MatchMethod::None
+            };
         }
 
         best
@@ -387,21 +387,21 @@ fn compute_pe_imphash(path: &str) -> Option<String> {
     // pe64::Pe and pe32::Pe are distinct traits.
     {
         use pelite::pe64::Pe;
-        if let Ok(file) = pelite::pe64::PeFile::from_bytes(data) {
-            if let Ok(imports) = file.imports() {
-                for desc in imports {
-                    let dll_name = desc.dll_name().ok()?;
-                    let dll = dll_name
-                        .to_str()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .trim_end_matches(".dll")
-                        .to_string();
-                    if let Ok(int_iter) = desc.int() {
-                        for import in int_iter.flatten() {
-                            if let pelite::pe64::imports::Import::ByName { name, .. } = import {
-                                entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
-                            }
+        if let Ok(file) = pelite::pe64::PeFile::from_bytes(data)
+            && let Ok(imports) = file.imports()
+        {
+            for desc in imports {
+                let dll_name = desc.dll_name().ok()?;
+                let dll = dll_name
+                    .to_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .trim_end_matches(".dll")
+                    .to_string();
+                if let Ok(int_iter) = desc.int() {
+                    for import in int_iter.flatten() {
+                        if let pelite::pe64::imports::Import::ByName { name, .. } = import {
+                            entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
                         }
                     }
                 }
@@ -411,21 +411,21 @@ fn compute_pe_imphash(path: &str) -> Option<String> {
 
     if entries.is_empty() {
         use pelite::pe32::Pe;
-        if let Ok(file) = pelite::pe32::PeFile::from_bytes(data) {
-            if let Ok(imports) = file.imports() {
-                for desc in imports {
-                    let dll_name = desc.dll_name().ok()?;
-                    let dll = dll_name
-                        .to_str()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .trim_end_matches(".dll")
-                        .to_string();
-                    if let Ok(int_iter) = desc.int() {
-                        for import in int_iter.flatten() {
-                            if let pelite::pe32::imports::Import::ByName { name, .. } = import {
-                                entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
-                            }
+        if let Ok(file) = pelite::pe32::PeFile::from_bytes(data)
+            && let Ok(imports) = file.imports()
+        {
+            for desc in imports {
+                let dll_name = desc.dll_name().ok()?;
+                let dll = dll_name
+                    .to_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .trim_end_matches(".dll")
+                    .to_string();
+                if let Ok(int_iter) = desc.int() {
+                    for import in int_iter.flatten() {
+                        if let pelite::pe32::imports::Import::ByName { name, .. } = import {
+                            entries.push(format!("{}.{}", dll, name.to_str().unwrap_or("")));
                         }
                     }
                 }

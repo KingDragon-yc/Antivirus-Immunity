@@ -93,12 +93,12 @@ impl ContainerContext {
             }
 
             // kubepods path — last segment is container ID
-            if line.contains("kubepods") {
-                if let Some(last_slash) = line.rfind('/') {
-                    let segment = &line[last_slash + 1..];
-                    if segment.len() >= 12 && segment.chars().all(|c| c.is_ascii_hexdigit()) {
-                        return Some(segment[..12].to_string());
-                    }
+            if line.contains("kubepods")
+                && let Some(last_slash) = line.rfind('/')
+            {
+                let segment = &line[last_slash + 1..];
+                if segment.len() >= 12 && segment.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Some(segment[..12].to_string());
                 }
             }
         }

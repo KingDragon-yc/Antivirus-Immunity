@@ -71,7 +71,7 @@ fn proc_start_time(pid: u32) -> Option<u64> {
 /// process that reused the PID during the AI deferral window.
 #[cfg(target_os = "linux")]
 fn guarded_sigkill(pid: u32, expected_start: Option<u64>) -> bool {
-    use nix::sys::signal::{kill, Signal};
+    use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
     // `expected_start == None` means we could not read `/proc/<pid>/stat`
     // when fingerprinting (process already exited, or permission denied).
@@ -303,7 +303,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let stopped_pids_for_signal = stopped_pids.clone();
         tokio::spawn(async move {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             let mut sigint = match signal(SignalKind::interrupt()) {
                 Ok(s) => s,
                 Err(e) => {
@@ -324,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
             }
             eprintln!("\n[!] Signal received: resuming all SIGSTOP'd processes before exit.");
             if let Ok(pids) = stopped_pids_for_signal.lock() {
-                use nix::sys::signal::{kill, Signal};
+                use nix::sys::signal::{Signal, kill};
                 use nix::unistd::Pid;
                 for pid in pids.iter() {
                     let _ = kill(Pid::from_raw(*pid as i32), Signal::SIGCONT);
@@ -418,7 +418,7 @@ async fn main() -> anyhow::Result<()> {
                         // mid-verdict (otherwise it would stay frozen forever).
                         #[cfg(target_os = "linux")]
                         {
-                            use nix::sys::signal::{kill, Signal};
+                            use nix::sys::signal::{Signal, kill};
                             use nix::unistd::Pid;
                             match kill(Pid::from_raw(event.pid as i32), Signal::SIGSTOP) {
                                 Ok(()) => {

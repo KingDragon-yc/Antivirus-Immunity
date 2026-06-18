@@ -125,7 +125,7 @@ impl PathValidator {
             None => {
                 return PathVerdict::UnknownLocation {
                     path: path_str.to_string(),
-                }
+                };
             }
         };
 

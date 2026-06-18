@@ -1,7 +1,7 @@
 [package]
 name = "antivirus-immunity-core"
 version = "0.4.1"
-edition = "2021"
+edition = "2024"
 description = "An antivirus engine inspired by the biological immune system, with local AI cortex"
 authors = ["KingDragon-yc"]
 

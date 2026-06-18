@@ -260,12 +260,11 @@ strong indicator of malicious intent.
         }
 
         // Extract JSON from markdown wrapping
-        if let Some(start) = trimmed.find('{') {
-            if let Some(end) = trimmed.rfind('}') {
-                if let Ok(v) = serde_json::from_str::<AiVerdict>(&trimmed[start..=end]) {
-                    return Some(v);
-                }
-            }
+        if let Some(start) = trimmed.find('{')
+            && let Some(end) = trimmed.rfind('}')
+            && let Ok(v) = serde_json::from_str::<AiVerdict>(&trimmed[start..=end])
+        {
+            return Some(v);
         }
 
         // Keyword fallback
