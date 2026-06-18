@@ -19,7 +19,7 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 lru = "0.18"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "webpki-roots", "http2"] }
-sysinfo = "0.31"
+sysinfo = "0.39"
 uuid = { version = "1.23", features = ["v4"] }
 
 # Fuzzy hashing: CTPH (Ssdeep-like) pure Rust + Imphash (PE/ELF import table)
