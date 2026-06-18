@@ -2,7 +2,7 @@
 
 > **"An antivirus inspired by the immune system, augmented with local AI — now with eBPF kernel-level vision."**
 
-[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-2024-orange.svg)](https://www.rust-lang.org/)
 [![eBPF](https://img.shields.io/badge/eBPF-CO--RE-blue.svg)](https://ebpf.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
