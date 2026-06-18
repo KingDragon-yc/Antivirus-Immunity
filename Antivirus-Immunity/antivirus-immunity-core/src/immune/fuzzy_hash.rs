@@ -522,7 +522,10 @@ mod tests {
         let small = determine_block_size(64);
         let large = determine_block_size(1_000_000);
         assert!(small >= 3);
-        assert!(large > small, "large file should have bigger block size (small={small}, large={large})");
+        assert!(
+            large > small,
+            "large file should have bigger block size (small={small}, large={large})"
+        );
         // Allow generous headroom over the implementation's guard; the exact
         // ceiling is an internal detail, what matters is monotonicity + lower
         // bound, which the assertions above cover.
