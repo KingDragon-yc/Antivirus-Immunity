@@ -11,7 +11,7 @@ antivirus-immunity-common = { path = "../antivirus-immunity-common" }
 tokio = { version = "1.52", features = ["full"] }
 anyhow = "1.0"
 clap = { version = "4.6", features = ["derive"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 yara-x = "1.17"
 serde = { version = "1.0", features = ["derive"] }
@@ -23,8 +23,8 @@ sysinfo = "0.31"
 uuid = { version = "1.23", features = ["v4"] }
 
 # Fuzzy hashing: CTPH (Ssdeep-like) pure Rust + Imphash (PE/ELF import table)
-pelite = "0.6"
-goblin = "0.9"
+pelite = "0.10"
+goblin = "0.10"
 
 [dependencies.windows]
 version = "0.57"
