@@ -4,4 +4,8 @@ members = [
     "antivirus-immunity-ebpf",
     "antivirus-immunity-common",
 ]
-resolver = "2"
+# edition 2024 implies resolver "3" (the current default for non-virtual
+# crates). Virtual workspaces default to "1" unless overridden, which would
+# both surprise users and trip is-it-slop's `resolver < 3` check. Pin it
+# explicitly so the resolver matches the edition.
+resolver = "3"
