@@ -77,24 +77,36 @@ jobs:
 
       # OpenSSL headers + libs are needed to build `yara-x`'s transitive dep
       # `authenticode-parser-sys`. Without this, `cargo build core` fails with
-      # `C1083: Cannot open include file: 'openssl/x509.h'`. We expose the
-      # install location via the OPENSSL_* env vars that the `openssl-sys`
-      # crate reads.
+      # `C1083: Cannot open include file: 'openssl/x509.h'`.
+      #
+      # The `openssl-sys` crate reads `OPENSSL_DIR` (and optionally
+      # `OPENSSL_LIB_DIR` / `OPENSSL_INCLUDE_DIR`) to locate the install. We
+      # set ONLY `OPENSSL_DIR` because openssl-sys auto-discovers `include` and
+      # `lib` under it — hard-coding a specific lib subdir (e.g. `lib\VC\x64\MT`)
+      # is fragile across choco package versions and previously caused the step
+      # to exit 1 when that exact subdir did not exist.
       - name: Install OpenSSL
         shell: powershell
         run: |
           choco install openssl --no-progress -y
-          $root = "C:\Program Files\OpenSSL-Win64"
-          "OPENSSL_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "OPENSSL_INCLUDE_DIR=$root\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          if (Test-Path "$root\lib\VC\x64\MT") {
-            "OPENSSL_LIB_DIR=$root\lib\VC\x64\MT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          } elseif (Test-Path "$root\lib") {
-            "OPENSSL_LIB_DIR=$root\lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          } else {
-            Write-Error "Could not locate OpenSSL libraries under $root"
+          # choco's openssl package installs under one of a few well-known
+          # roots depending on package version; pick whichever exists.
+          $candidates = @(
+            "C:\Program Files\OpenSSL-Win64",
+            "C:\Program Files\OpenSSL",
+            "C:\OpenSSL-Win64"
+          )
+          $root = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $root) {
+            Write-Error "OpenSSL install root not found in any of: $($candidates -join ', ')"
+            Get-ChildItem "C:\Program Files" -Filter "OpenSSL*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  found: $($_.FullName)" }
             exit 1
           }
+          Write-Host "Using OpenSSL at: $root"
+          Get-ChildItem "$root\lib" -Recurse -Filter "libcrypto*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "  lib: $($_.FullName)" }
+          # openssl-sys derives lib/include from OPENSSL_DIR automatically.
+          "OPENSSL_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - uses: dtolnay/rust-toolchain@stable
         with:
