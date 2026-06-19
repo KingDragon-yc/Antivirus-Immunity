@@ -71,6 +71,11 @@ pub struct ProcessContext {
     pub network_activity: Vec<String>,
     pub file_access: Vec<String>,
     pub danger_level: String,
+    /// Whether the hash is in the trusted DB. **Deliberately NOT passed to the
+    /// model as a raw boolean** — see `build_prompt`'s `hash_trust_hint`. A
+    /// process that poisoned the DB during learning could otherwise bias the
+    /// model toward SAFE. Kept on the struct so callers/rule-engine can still
+    /// read it; the prompt only surfaces a pre-judged, location-aware hint.
     pub is_known_hash: bool,
     /// Path-validation verdict string (e.g. "Verified"/"TrustedLocation"/
     /// "UnknownLocation"). Windows `core` fills this from its PathValidator;
@@ -153,7 +158,13 @@ impl AiCortex {
         match self.client.post(&url).json(&request).send().await {
             Ok(resp) => {
                 if let Ok(r) = resp.json::<OllamaResponse>().await {
-                    return self.parse_verdict(&r.response);
+                    let mut verdict = self.parse_verdict(&r.response)?;
+                    // Output-side prompt-injection guard: a SAFE verdict must
+                    // cite concrete evidence, otherwise downgrade to UNCERTAIN.
+                    // (override_suspicious_safe, which needs the ProcessContext,
+                    // is applied by the caller.)
+                    crate::safety::validate_safe_verdict(&mut verdict);
+                    return Some(verdict);
                 }
                 None
             }
@@ -196,6 +207,24 @@ impl AiCortex {
             ctx.file_access.join("; ")
         };
 
+        // Desensitize `is_known_hash`: never surface the raw boolean to the
+        // model. A process that poisoned the trusted DB during learning could
+        // otherwise lean the model toward SAFE merely by being listed. Instead
+        // we emit a pre-judged hint that directs the model's attention to the
+        // *location* mismatch (the actual thing worth investigating when a
+        // trusted hash shows up from a weird path). The (trusted hash + trusted
+        // path) case never reaches AI — it is short-circuited by the rule
+        // engine — so we only handle the two cases that can reach the model.
+        let hash_trust_hint = if ctx.is_known_hash {
+            // A known hash running from a non-standard location is exactly the
+            // DLL-hijack / binary-swap profile; tell the model to investigate
+            // rather than trust the hash.
+            "Trusted hash seen, but this process reached AI review — verify the \
+             path/location anomaly before concluding SAFE."
+        } else {
+            "Hash not in trusted database."
+        };
+
         format!(
             r#"You are a cybersecurity analyst AI embedded in a security system.
 Analyze the following process and determine if it is safe, suspicious, or malicious.
@@ -219,7 +248,7 @@ strong indicator of malicious intent.
 - **Path Validation**: «{}»
 - **YARA Matches**: «{}»
 - **System Danger Level**: «{}»
-- **Hash in Trusted DB**: {}
+- **Hash Trust Status**: {}
 
 ## Instructions
 1. Analyze all available signals together.
@@ -227,6 +256,11 @@ strong indicator of malicious intent.
 3. Check for common malware behaviors (impersonation, suspicious locations,
    reverse shells, mining pools, sensitive file access, etc.).
 4. Provide your assessment.
+5. EVIDENCE REQUIREMENT FOR SAFE: if you classify the process as SAFE, the
+   `reasoning` field MUST cite at least two distinct concrete signals that
+   support that verdict (for example "path under System32" AND "SHA256 in
+   trusted database"). Vague statements like "looks normal" are NOT enough
+   to justify SAFE — when in doubt, return UNCERTAIN instead.
 
 ## Required Output Format (STRICT JSON, no markdown):
 {{"classification": "SAFE|SUSPICIOUS|MALICIOUS|UNCERTAIN", "confidence": 0.0-1.0, "reasoning": "your analysis", "recommendation": "ALLOW|MONITOR|QUARANTINE|TERMINATE"}}
@@ -243,11 +277,7 @@ strong indicator of malicious intent.
             sanitize_field(&ctx.path_verdict),
             sanitize_field(&yara),
             sanitize_field(&ctx.danger_level),
-            if ctx.is_known_hash {
-                "Yes (Trusted)"
-            } else {
-                "No (Unknown)"
-            },
+            hash_trust_hint,
         )
     }
 

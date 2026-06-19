@@ -311,7 +311,19 @@ async fn main() -> anyhow::Result<()> {
 
                         print!("    🧠 AI Cortex analyzing... ");
                         match ai_cortex.evaluate(&ctx).await {
-                            Some(verdict) => {
+                            Some(mut verdict) => {
+                                // Output-side guard: a high-confidence SAFE
+                                // from a non-trusted path WITH a YARA hit is a
+                                // classic prompt-injection tells — demote to
+                                // SUSPICIOUS/MONITOR (no kill) for human review.
+                                if antivirus_immunity_common::safety::override_suspicious_safe(
+                                    &mut verdict,
+                                    &ctx,
+                                ) {
+                                    println!(
+                                        "    [⚠] AI SAFE verdict auto-downgraded to MONITOR (high-conf SAFE + non-trusted path + YARA match)."
+                                    );
+                                }
                                 println!(
                                     "[{}] (confidence: {:.0}%)",
                                     verdict.classification,
