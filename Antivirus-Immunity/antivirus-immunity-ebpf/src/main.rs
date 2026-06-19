@@ -484,7 +484,19 @@ async fn main() -> anyhow::Result<()> {
                             .await;
 
                             match ai_result {
-                                Ok(Some(verdict)) => {
+                                Ok(Some(mut verdict)) => {
+                                    // Output-side guard: high-conf SAFE from a
+                                    // non-trusted path WITH a YARA hit is a
+                                    // classic injection tell — demote to
+                                    // SUSPICIOUS/MONITOR (no kill).
+                                    if antivirus_immunity_common::safety::override_suspicious_safe(
+                                        &mut verdict,
+                                        &ctx,
+                                    ) {
+                                        println!(
+                                            "    [⚠] AI SAFE verdict auto-downgraded to MONITOR (high-conf SAFE + non-trusted path + YARA match)."
+                                        );
+                                    }
                                     println!(
                                         "    [🧠] AI verdict for PID {} ({}): {} (confidence {:.0}%) → {}",
                                         pid, comm,

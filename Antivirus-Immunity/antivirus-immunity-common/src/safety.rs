@@ -178,6 +178,136 @@ pub fn sanitize_field(s: &str) -> String {
     truncate_chars(&collapsed, 512).to_string()
 }
 
+// ─── AI verdict post-processing (prompt-injection hardening) ───
+
+use crate::ai_cortex::{AiVerdict, ProcessContext};
+
+/// Evidence-keyword categories used by [`validate_safe_verdict`].
+///
+/// A genuine SAFE verdict should cite concrete, checkable signals. A model
+/// that was prompt-injected into returning SAFE typically cannot fabricate a
+/// coherent evidence chain, so we require the reasoning to reference signals
+/// from at least two *distinct* categories below.
+const EVIDENCE_PATH_KEYWORDS: &[&str] = &[
+    "system32",
+    "syswow64",
+    "program files",
+    "windows",
+    "trusted",
+    "verified",
+    "usr/bin",
+    "usr/sbin",
+    "usr/lib",
+    "bin/",
+    "sbin/",
+    "snap",
+];
+
+const EVIDENCE_HASH_KEYWORDS: &[&str] = &[
+    "hash",
+    "sha256",
+    "trusted db",
+    "trusted database",
+    "known hash",
+    "whitelist",
+    "allowlist",
+    "reputation",
+];
+
+const EVIDENCE_BEHAVIOR_KEYWORDS: &[&str] = &[
+    "signed",
+    "signature",
+    "legitimate",
+    "no suspicious",
+    "normal behavior",
+    "expected",
+    "benign",
+];
+
+/// Validate that a SAFE verdict is backed by concrete evidence in its
+/// reasoning, downgrading it if not.
+///
+/// This is the output-side counterpart to the input-side `sanitize_field` /
+/// `«»` delimiter hardening: even if an attacker manages to inject a
+/// `"classification":"SAFE"` into the model's response, the model still has
+/// to produce a reasoning string that references real signals. Small models
+/// can bluff "looks fine" but struggle to fabricate two distinct, specific
+/// evidence categories.
+///
+/// On failure the verdict is mutated in place:
+///   - `classification` SAFE -> UNCERTAIN
+///   - `confidence` capped at 0.5
+///   - a `[evidence-check: ...]` note appended to `reasoning`
+///
+/// Returns `true` if the verdict was downgraded.
+pub fn validate_safe_verdict(verdict: &mut AiVerdict) -> bool {
+    if verdict.classification != "SAFE" {
+        return false;
+    }
+    let lower = verdict.reasoning.to_lowercase();
+    let path_hit = EVIDENCE_PATH_KEYWORDS.iter().any(|k| lower.contains(k));
+    let hash_hit = EVIDENCE_HASH_KEYWORDS.iter().any(|k| lower.contains(k));
+    let behavior_hit = EVIDENCE_BEHAVIOR_KEYWORDS.iter().any(|k| lower.contains(k));
+
+    // Need at least two distinct categories; behaviour alone is weak (counts
+    // as half), so a behaviour-only hit is never sufficient on its own.
+    let mut score = 0u32;
+    if path_hit {
+        score += 1;
+    }
+    if hash_hit {
+        score += 1;
+    }
+    if behavior_hit && score > 0 {
+        score += 1;
+    }
+    if score >= 2 {
+        return false;
+    }
+
+    verdict.classification = "UNCERTAIN".to_string();
+    if verdict.confidence > 0.5 {
+        verdict.confidence = 0.5;
+    }
+    verdict.reasoning = format!(
+        "{} [evidence-check: insufficient concrete signals cited for SAFE]",
+        verdict.reasoning
+    );
+    verdict.recommendation = "MONITOR".to_string();
+    true
+}
+
+/// Force-downgrade a high-confidence SAFE verdict that lacks a trustworthy
+/// explanation: SAFE + confidence>=0.9 + non-trusted path + YARA match.
+///
+/// This combination is vanishingly rare in legitimate software (a benign
+/// binary is normally in a trusted location *or* doesn't trip YARA), so when
+/// the model asserts SAFE under exactly these suspicious conditions we treat
+/// it as a likely successful injection and demote to SUSPICIOUS/MONITOR. The
+/// process is not killed (MONITOR, not TERMINATE) to bound the blast radius
+/// of a false downgrade; the event is logged for human review.
+///
+/// Returns `true` if the verdict was downgraded.
+pub fn override_suspicious_safe(verdict: &mut AiVerdict, ctx: &ProcessContext) -> bool {
+    if verdict.classification != "SAFE" {
+        return false;
+    }
+    let high_conf = verdict.confidence >= 0.9;
+    let non_trusted = !is_trusted_path(ctx.path.as_deref().unwrap_or(""));
+    let has_yara = !ctx.yara_matches.is_empty();
+    if !(high_conf && non_trusted && has_yara) {
+        return false;
+    }
+
+    verdict.classification = "SUSPICIOUS".to_string();
+    verdict.recommendation = "MONITOR".to_string();
+    verdict.reasoning = format!(
+        "{} [auto-downgrade: SAFE at high confidence from non-trusted path with YARA match — suspicious combination]",
+        verdict.reasoning
+    );
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +343,131 @@ mod tests {
         assert!(!ai_destructive_allowed_by_path(0.99, "/usr/bin"));
         // prefix spoofing must NOT inherit trust
         assert!(ai_destructive_allowed_by_path(0.99, "/usr/bin-evil/x"));
+    }
+
+    // ─── validate_safe_verdict ───
+
+    fn safe_verdict(reasoning: &str, confidence: f64) -> crate::ai_cortex::AiVerdict {
+        crate::ai_cortex::AiVerdict {
+            classification: "SAFE".to_string(),
+            confidence,
+            reasoning: reasoning.to_string(),
+            recommendation: "ALLOW".to_string(),
+        }
+    }
+
+    #[test]
+    fn safe_with_two_evidence_categories_is_kept() {
+        let mut v = safe_verdict(
+            "Process runs from C:\\Windows\\System32 and its SHA256 is in the trusted database.",
+            0.9,
+        );
+        assert!(!validate_safe_verdict(&mut v));
+        assert_eq!(v.classification, "SAFE");
+        assert_eq!(v.confidence, 0.9); // untouched
+    }
+
+    #[test]
+    fn safe_with_only_vague_reasoning_is_downgraded() {
+        let mut v = safe_verdict("looks fine, nothing suspicious here", 0.95);
+        assert!(validate_safe_verdict(&mut v));
+        assert_eq!(v.classification, "UNCERTAIN");
+        assert!(v.confidence <= 0.5);
+        assert!(v.reasoning.contains("evidence-check"));
+    }
+
+    #[test]
+    fn safe_with_empty_reasoning_is_downgraded() {
+        let mut v = safe_verdict("", 0.9);
+        assert!(validate_safe_verdict(&mut v));
+        assert_eq!(v.classification, "UNCERTAIN");
+    }
+
+    #[test]
+    fn safe_with_behaviour_only_is_downgraded() {
+        // "legitimate" is a behaviour keyword but with no path/hash backing
+        // it is insufficient.
+        let mut v = safe_verdict("This is a legitimate process", 0.9);
+        assert!(validate_safe_verdict(&mut v));
+        assert_eq!(v.classification, "UNCERTAIN");
+    }
+
+    #[test]
+    fn validate_only_applies_to_safe() {
+        let mut v = crate::ai_cortex::AiVerdict {
+            classification: "MALICIOUS".to_string(),
+            confidence: 0.99,
+            reasoning: "evil".to_string(),
+            recommendation: "TERMINATE".to_string(),
+        };
+        assert!(!validate_safe_verdict(&mut v));
+        assert_eq!(v.classification, "MALICIOUS"); // untouched
+    }
+
+    // ─── override_suspicious_safe ───
+
+    fn ctx(path: &str, yara: &[&str]) -> crate::ai_cortex::ProcessContext {
+        crate::ai_cortex::ProcessContext {
+            pid: 1,
+            name: "x".to_string(),
+            path: Some(path.to_string()),
+            hash: None,
+            cmdline: None,
+            container_id: None,
+            parent_chain: Vec::new(),
+            network_activity: Vec::new(),
+            file_access: Vec::new(),
+            danger_level: "Normal".to_string(),
+            is_known_hash: false,
+            path_verdict: String::new(),
+            yara_matches: yara.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn override_downgrades_suspicious_combination() {
+        let mut v = safe_verdict("model says safe", 0.95);
+        let c = ctx("/tmp/evil", &["Test_Malware"]);
+        assert!(override_suspicious_safe(&mut v, &c));
+        assert_eq!(v.classification, "SUSPICIOUS");
+        assert_eq!(v.recommendation, "MONITOR");
+        assert!(v.reasoning.contains("auto-downgrade"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn override_skips_when_trusted_path() {
+        let mut v = safe_verdict("safe", 0.95);
+        let c = ctx("/usr/bin/ls", &["SomeRule"]);
+        assert!(!override_suspicious_safe(&mut v, &c));
+        assert_eq!(v.classification, "SAFE");
+    }
+
+    #[test]
+    fn override_skips_when_no_yara() {
+        let mut v = safe_verdict("safe", 0.95);
+        let c = ctx("/tmp/x", &[]);
+        assert!(!override_suspicious_safe(&mut v, &c));
+        assert_eq!(v.classification, "SAFE");
+    }
+
+    #[test]
+    fn override_skips_when_low_confidence() {
+        let mut v = safe_verdict("safe", 0.85);
+        let c = ctx("/tmp/x", &["Rule"]);
+        assert!(!override_suspicious_safe(&mut v, &c));
+        assert_eq!(v.classification, "SAFE");
+    }
+
+    #[test]
+    fn override_only_applies_to_safe() {
+        let mut v = crate::ai_cortex::AiVerdict {
+            classification: "MALICIOUS".to_string(),
+            confidence: 0.99,
+            reasoning: "evil".to_string(),
+            recommendation: "TERMINATE".to_string(),
+        };
+        let c = ctx("/tmp/x", &["Rule"]);
+        assert!(!override_suspicious_safe(&mut v, &c));
     }
 }
