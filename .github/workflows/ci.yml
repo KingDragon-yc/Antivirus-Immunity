@@ -20,7 +20,8 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler cmake pkg-config libssl-dev
+          sudo apt-get install -y protobuf-compiler cmake pkg-config libssl-dev \
+            clang llvm libelf-dev zlib1g-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:

@@ -40,8 +40,8 @@ Antivirus-Immunity 是基于 **人工免疫系统 (AIS)** 理论的安全防护�
 | Linux 进程事件源 (Netlink Connector) | ✅ 可用 | `NETLINK_CONNECTOR` 内核推送，订阅 FORK/EXEC/EXIT |
 | Linux `/proc` 轮询兜底 | ✅ 可用 | 无 Netlink 时的最终降级路径 |
 | 异步推迟阻断 (SIGSTOP→AI→SIGKILL/SIGCONT) | ✅ 可用 | 已加固 PID 复用竞态防护 |
-| **eBPF CO-RE 探针加载 / Ring Buffer 消费** | 🚧 规划中 (v0.5) | `bpf/probes.bpf.c` 已编写但**尚未通过 libbpf-rs 加载/挂载**；当前运行时实际使用 Netlink/`proc` |
-| XDP/TC 网络阻断 · LSM 文件护栏内核实现 | 🚧 规划中 (v0.6) | 探针 C 源码存在，内核侧强制尚未接入 |
+| **eBPF CO-RE 进程探针 / Ring Buffer 消费** | ✅ 可用 | libbpf-rs 0.26 加载并附加 exec/exit tracepoint；固定 ABI Ring Buffer 传输；失败时降级 Netlink/`proc` |
+| XDP/TC 网络阻断 · LSM 文件护栏内核实现 | 🚧 规划中 (v0.6) | 尚未实现；当前 eBPF 仅覆盖进程执行与退出观测 |
 
 ---
 
@@ -54,10 +54,10 @@ Antivirus-Immunity 是基于 **人工免疫系统 (AIS)** 理论的安全防护�
                     │                                     │
   ┌─────────────────┴─────────┐   ┌──────────────────────┴──────────┐
   │  antivirus-immunity-core  │   │  antivirus-immunity-ebpf        │
-  │  (Windows · Legacy v0.3)  │   │  (Linux · v0.4 · Netlink 在用) │
+  │  (Windows · Legacy v0.3)  │   │  (Linux · v0.5 · eBPF 在用)    │
   │                           │   │                                 │
-  │  ToolHelp32 进程扫描      │   │  eBPF 探针 (CO-RE · 规划中)     │
-  │  YARA 规则引擎            │   │  Netlink Connector (零轮询)     │
+  │  ToolHelp32 进程扫描      │   │  eBPF exec/exit (CO-RE)         │
+  │  YARA 规则引擎            │   │  Ring Buffer + Netlink fallback │
   │  Windows API              │   │  Async Deferred Blocking        │
   │  Fuzzy Hash (Ssdeep+Imph) │   │  Docker/K8s 容器感知            │
   │  Quarantine (Rename隔离)  │   │  策略引擎 + AI Agent 沙盒       │
@@ -99,15 +99,15 @@ Antivirus-Immunity 是基于 **人工免疫系统 (AIS)** 理论的安全防护�
 
 ```
 poll_events() 优先级:
-  1. eBPF Ring Buffer      (生产 — 内核探针)  ← 🚧 规划中, 尚未接入
-  2. Netlink Connector      (内核推送, 毫秒级延迟, 零 CPU 轮询)  ← ✅ 当前实际使用
+  1. eBPF Ring Buffer       (CO-RE exec/exit 内核探针)  ← ✅ 默认
+  2. Netlink Connector      (内核推送, 毫秒级延迟)     ← ✅ 加载失败时降级
   3. /proc 轮询             (最终兜底 — 极老内核兼容)  ← ✅ 降级路径
 ```
 
 ### 异步推迟阻断 (Async Deferred Blocking)
 
 ```
-Netlink 检测 EXEC → SIGSTOP 进程 → AI Cortex (500ms timeout)
+eBPF/Netlink 检测 EXEC → SIGSTOP 进程 → AI Cortex (500ms timeout)
     ├─ TERMINATE/MALICIOUS → SIGKILL (先校验 /proc starttime, 防 PID 复用误杀)
     ├─ SAFE/ALLOW          → SIGCONT (恢复)
     └─ 超时                → SIGCONT + 日志 (默认放行)
@@ -132,13 +132,15 @@ Antivirus-Immunity/
 │       ├── ai_cortex.rs               # Ollama LLM 接口
 │       └── hash_cache.rs             # LRU SHA256 缓存
 │
-├── antivirus-immunity-ebpf/            # Linux eBPF 引擎 (v0.4.0)
+├── antivirus-immunity-ebpf/            # Linux eBPF 引擎 (v0.5.0)
 │   ├── Cargo.toml
-│   ├── build.sh                        # eBPF 编译脚本
+│   ├── build.rs                        # libbpf-cargo CO-RE skeleton 构建
 │   ├── bpf/
-│   │   └── probes.bpf.c               # CO-RE 内核探针 (C)
+│   │   ├── probes.bpf.c               # CO-RE exec/exit 内核探针
+│   │   └── vmlinux.h                  # 最小 CO-RE 类型声明
 │   └── src/
 │       ├── main.rs                     # CLI + 事件循环 + 异步推迟阻断
+│       ├── ebpf_runtime.rs             # libbpf-rs 加载 + Ring Buffer 消费
 │       ├── probe.rs                    # 探针管理 (eBPF / Netlink / /proc)
 │       ├── netlink_connector.rs       # NETLINK_CONNECTOR 零轮询进程监听
 │       ├── container.rs               # Docker/K8s 容器上下文
@@ -172,16 +174,16 @@ Antivirus-Immunity/
 
 ## 内核探针挂载点 (Linux)
 
-> 🚧 下表探针已在 `bpf/probes.bpf.c` 中以 CO-RE 形式编写，但**当前尚未通过 libbpf-rs 加载挂载**（计划于 v0.5）。在此之前，进程事件由 Netlink Connector 提供，网络 / 文件 / 提权事件尚未接入策略引擎。
+> v0.5 已真实加载进程执行/退出探针并消费 Ring Buffer。网络、文件、提权和阻断探针仍属于后续里程碑，不能视为已实现。
 
 | 探针 | 挂载点 | 功能 | Lite模式 |
 |------|--------|------|----------|
 | 进程执行 | `tracepoint/syscalls/sys_enter_execve` | 捕获所有新进程 | ✅ |
-| TCP 外联 | `kprobe/tcp_connect` | 检测出站连接 (挖矿池/C2/反弹shell) | ✅ |
-| 提权检测 | `kprobe/commit_creds` | UID 变更至 root | ✅ |
-| 文件访问 | `LSM/security_file_open` | 保护敏感文件 (/etc/shadow 等) | ❌ |
-| 文件创建 | `LSM/security_inode_create` | 检测可疑文件写入 | ❌ |
-| 网络阻断 | `XDP / TC` | 内核级包过滤 | ❌ |
+| 进程退出 | `tracepoint/sched/sched_process_exit` | 捕获进程退出 | ✅ |
+| TCP/UDP 外联 | `kprobe` / `fentry` | 尚未实现 | ❌ |
+| 提权检测 | `kprobe/commit_creds` | 尚未实现 | ❌ |
+| 文件访问/创建 | BPF LSM | 尚未实现 | ❌ |
+| 网络阻断 | `XDP / TC` | 尚未实现 | ❌ |
 
 ---
 
@@ -202,7 +204,7 @@ Antivirus-Immunity/
 
 ```bash
 # Linux (Ubuntu/Debian)
-sudo apt install clang llvm libbpf-dev bpftool
+sudo apt install clang llvm build-essential pkg-config libelf-dev zlib1g-dev
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Ollama (可选, 用于 AI Cortex)
@@ -220,7 +222,7 @@ cargo build --release
 sudo ./target/release/immunity-ebpf --profile server
 
 # AI Agent 沙盒模式
-sudo ./target/release/immunity-ebpf --profile ai-agent --ai --ai-model qwen2.5:3b
+sudo ./target/release/immunity-ebpf --profile ai-agent --ai true --ai-model qwen2.5:3b
 
 # Lite 模式 (自动检测, 也可手动)
 sudo ./target/release/immunity-ebpf --profile server --max-memory-mb 30
@@ -234,7 +236,7 @@ USAGE: immunity-ebpf [OPTIONS]
 OPTIONS:
   -m, --mode <MODE>           运行模式: monitor, enforce, learn [default: monitor]
   -p, --profile <PROFILE>     策略配置: server, container, ai-agent [default: server]
-      --ai                    启用 AI Cortex
+      --ai <true|false>       启用或关闭 AI Cortex [default: true]
       --ai-model <MODEL>      AI 模型 [default: qwen2.5:3b]
       --ai-endpoint <URL>     Ollama 地址 [default: http://localhost:11434]
       --protected-paths <P>   受保护路径 (逗号分隔)
@@ -277,7 +279,7 @@ cargo run -p antivirus-immunity-core -- --mode quarantine-list  # 查看隔离�
 - [x] **v0.3.0** — Windows 引擎 (ToolHelp32 + YARA + AI Cortex + Fuzzy Hash + Quarantine)
 - [x] **v0.4.0** — Linux eBPF 架构骨架 + 策略引擎 + Netlink Connector + Async Deferred Blocking
 - [x] **v0.4.1** — 安全加固（见下方"安全加固"章节）
-- [ ] **v0.5.0** — 真实 eBPF CO-RE 探针加载 (libbpf-rs) + Ring Buffer 消费
+- [x] **v0.5.0** — 真实 eBPF CO-RE exec/exit 探针加载 (libbpf-rs) + Ring Buffer 消费
 - [ ] **v0.6.0** — XDP/TC 网络阻断 + LSM 文件护栏内核实现
 - [ ] **v0.7.0** — K8s Sidecar 部署 + Prometheus metrics + 威胁情报黑名单模糊哈希库
 - [ ] **v1.0.0** — 生产就绪
@@ -290,9 +292,9 @@ cargo run -p antivirus-immunity-core -- --mode quarantine-list  # 查看隔离�
 
 利用 Windows 允许对运行中文件在同卷内 `MoveFileExW` 的机制，先 `fs::rename` 移走磁盘文件再 `TerminateProcess` 杀进程。恶意软件无法自恢复。隔离文件以 UUID + `.quarantine` 后缀存放，防止误双击执行；manifest 的 hex 编码仅为**避免明文与防误读，并非加密或防篡改**。
 
-### Linux: Netlink Connector 零轮询事件源
+### Linux: CO-RE eBPF + Ring Buffer 事件源
 
-替代 `/proc` 轮询，通过 `NETLINK_CONNECTOR` + `CN_IDX_PROC` 订阅内核 FORK/EXEC/EXIT 事件。内核主动推送，毫秒级延迟，完全消除 TOCTOU 竞态和 CPU 空转。
+`libbpf-cargo` 在构建时把探针嵌入二进制，`libbpf-rs` 在运行时执行 CO-RE 重定位并附加 exec/exit tracepoint。内核事件经 256 KiB Ring Buffer 进入有界用户态队列；加载失败时才降级到 Netlink Connector，再失败则使用 `/proc`。
 
 ### Linux: Async Deferred Blocking
 
@@ -322,7 +324,7 @@ cargo run -p antivirus-immunity-core -- --mode quarantine-list  # 查看隔离�
 
 ### Linux 端
 - **PID 复用竞态防护**：异步推迟阻断在 500ms AI 窗口后才发 `SIGKILL`，期间原进程可能已退出并被复用 PID。现以 `/proc/<pid>/stat` 的 starttime 作指纹，击杀前重新校验，避免误杀无辜进程。
-- **运行时输出诚实化**：启动横幅不再谎称 "Probes initialized: tracepoint/kprobe/LSM..."（实际未加载 eBPF），改为标注"规划中、当前使用 Netlink/proc"。
+- **运行时输出诚实化**：启动日志报告实际激活的 CO-RE exec/exit 探针与 Ring Buffer；网络、LSM 和提权能力仍明确标为未实现。
 
 ### 工程
 - 补齐缺失的 [LICENSE](LICENSE)（MIT，徽章原先指向不存在的文件）。

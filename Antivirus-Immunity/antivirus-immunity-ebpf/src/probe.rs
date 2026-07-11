@@ -13,6 +13,8 @@
 //!   3. /proc 轮询 (最终兜底，兼容非常老的内核)
 
 #[cfg(target_os = "linux")]
+use crate::ebpf_runtime::EbpfRuntime;
+#[cfg(target_os = "linux")]
 use crate::netlink_connector::NetlinkConnector;
 use anyhow::Result;
 use std::collections::HashSet;
@@ -46,47 +48,49 @@ pub enum ProbeType {
 pub struct ProbeManager {
     lite_mode: bool,
     known_pids: HashSet<u32>,
+    /// Real libbpf-backed CO-RE loader and Ring Buffer consumer.
+    #[cfg(target_os = "linux")]
+    ebpf: Option<EbpfRuntime>,
     /// Netlink Connector socket — preferred fallback for non-eBPF systems.
     /// If None, falls through to /proc polling.
     #[cfg(target_os = "linux")]
     netlink: Option<NetlinkConnector>,
-    // In production: BPF object handles, ring buffer consumer, maps
-    // bpf_obj: Option<libbpf_rs::Object>,
-    // ring_buf: Option<libbpf_rs::RingBuffer>,
 }
 
 impl ProbeManager {
     pub fn new(lite_mode: bool) -> Result<Self> {
-        // In production Linux build:
-        // 1. Open the compiled BPF object
-        //    let obj = libbpf_rs::ObjectBuilder::default()
-        //        .open_file("probes/immunity.bpf.o")?
-        //        .load()?;
-        // 2. Attach probes
-        //    obj.prog("handle_execve")?.attach()?;
-        //    obj.prog("handle_tcp_connect")?.attach()?;
-        //    if !lite_mode {
-        //        obj.prog("handle_file_open")?.attach()?;
-        //        obj.prog("handle_cred_change")?.attach()?;
-        //    }
-        // 3. Set up ring buffer
-        //    let ring_buf = libbpf_rs::RingBufferBuilder::new()
-        //        .add(obj.map("events")?, callback)?
-        //        .build()?;
-
-        // Try to initialize Netlink Connector for zero-polling process events
         #[cfg(target_os = "linux")]
-        let netlink = NetlinkConnector::new().ok();
+        let ebpf = match EbpfRuntime::start() {
+            Ok(runtime) => {
+                println!(
+                    "[+] ProbeManager: CO-RE eBPF probes attached; consuming kernel events via Ring Buffer"
+                );
+                Some(runtime)
+            }
+            Err(error) => {
+                eprintln!("[!] eBPF unavailable: {error:#}. Trying Netlink fallback.");
+                None
+            }
+        };
+
+        // Do not subscribe to a second kernel event source while eBPF is
+        // active; that would duplicate every exec/exit event.
+        #[cfg(target_os = "linux")]
+        let netlink = if ebpf.is_none() {
+            NetlinkConnector::new().ok()
+        } else {
+            None
+        };
         #[cfg(not(target_os = "linux"))]
         let _netlink: Option<()> = None;
 
         #[cfg(target_os = "linux")]
         {
-            if netlink.is_some() {
+            if ebpf.is_none() && netlink.is_some() {
                 println!(
                     "[+] ProbeManager: Netlink Connector initialized (zero-polling process events)"
                 );
-            } else {
+            } else if ebpf.is_none() {
                 println!(
                     "[!] ProbeManager: Netlink Connector unavailable, falling back to /proc polling"
                 );
@@ -97,6 +101,8 @@ impl ProbeManager {
             lite_mode,
             known_pids: HashSet::new(),
             #[cfg(target_os = "linux")]
+            ebpf,
+            #[cfg(target_os = "linux")]
             netlink,
         })
     }
@@ -104,11 +110,21 @@ impl ProbeManager {
     /// Poll for new events.
     /// Priority: eBPF Ring Buffer → Netlink Connector → /proc polling
     pub fn poll_events(&mut self) -> Result<Vec<RawProbeEvent>> {
-        // In production: ring_buf.poll(timeout)
-        // For now: try Netlink first, fall back to /proc
-
         #[cfg(target_os = "linux")]
         {
+            if let Some(ref ebpf) = self.ebpf {
+                match ebpf.drain_events() {
+                    Ok(events) => return Ok(events),
+                    Err(error) => {
+                        eprintln!(
+                            "    [!] eBPF Ring Buffer failed: {error:#}. Trying Netlink fallback."
+                        );
+                        self.ebpf = None;
+                        self.netlink = NetlinkConnector::new().ok();
+                    }
+                }
+            }
+
             if let Some(ref mut nl) = self.netlink {
                 match nl.recv_events() {
                     Ok(events) if !events.is_empty() => {

@@ -8,11 +8,8 @@
 //! 架构：
 //! ┌──────────────────────────────────────────────┐
 //! │  Kernel Space (eBPF probes, C/restricted)     │
-//! │  ┌─────────┐ ┌──────────┐ ┌───────────────┐ │
-//! │  │ execve  │ │ tcp_conn │ │ LSM file_open │ │
-//! │  │ tracepoint│ │ kprobe   │ │ bpf hook     │ │
-//! │  └────┬────┘ └─────┬────┘ └──────┬────────┘ │
-//! │       └─────────────┼─────────────┘          │
+//! │       execve + process_exit tracepoints      │
+//! │                     │                        │
 //! │              BPF Ring Buffer                  │
 //! ├──────────────────────┼────────────────────────┤
 //! │  User Space (Rust)   │                        │
@@ -35,6 +32,8 @@
 //! └──────────────────────────────────────────────┘
 
 mod container;
+#[cfg(target_os = "linux")]
+mod ebpf_runtime;
 mod filesystem;
 #[cfg(target_os = "linux")]
 mod netlink_connector;
@@ -100,7 +99,7 @@ fn guarded_sigkill(pid: u32, expected_start: Option<u64>) -> bool {
 #[command(
     name = "immunity-ebpf",
     author = "KingDragon-yc",
-    version = "0.4.0",
+    version,
     about = "eBPF-based cloud-native Linux security engine",
     long_about = "Antivirus-Immunity eBPF edition uses kernel-level probes for zero-overhead \
                   process monitoring, network interception, and file system guardrails. \
@@ -116,7 +115,7 @@ struct Args {
     profile: String,
 
     /// Enable AI Cortex for deep analysis
-    #[arg(long, default_value = "true")]
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     ai: bool,
 
     /// AI model name
@@ -154,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!();
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║        Antivirus-Immunity eBPF Engine v0.4.0               ║");
+    println!("║        Antivirus-Immunity eBPF Engine v0.5.0               ║");
     println!("║        Cloud-Native Linux Security · eBPF + AI Cortex      ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
@@ -248,22 +247,13 @@ async fn main() -> anyhow::Result<()> {
 
     // ==================== EVENT SOURCE INITIALIZATION ====================
     println!();
-    // NOTE: CO-RE eBPF object loading and ring-buffer consumption are not yet
-    // wired up (see bpf/probes.bpf.c and the roadmap). The engine currently
-    // ingests process events via the Netlink Connector, falling back to /proc
-    // polling. ProbeManager::new prints which source is actually active.
-    println!(
-        "[*] Initializing event source (eBPF ring buffer not yet wired — using Netlink/proc)..."
-    );
+    println!("[*] Initializing CO-RE eBPF event source...");
 
     let mut probe_manager = probe::ProbeManager::new(lite_mode)?;
-    println!("[*] Planned eBPF probes (compiled in bpf/probes.bpf.c, not yet attached):");
+    println!("[*] Active eBPF probe set:");
     println!("    - Process: tracepoint/syscalls/sys_enter_execve");
-    println!("    - Network: kprobe/tcp_connect, kprobe/udp_sendmsg");
-    if !lite_mode {
-        println!("    - File:    LSM/security_file_open, LSM/security_inode_create");
-        println!("    - Creds:   kprobe/commit_creds");
-    }
+    println!("    - Process: tracepoint/sched/sched_process_exit");
+    println!("    - Channel: BPF_MAP_TYPE_RINGBUF (256 KiB)");
     println!();
 
     // ==================== PROCESS TREE ====================

@@ -173,7 +173,7 @@ cargo run --release -- --mode active --policy kill --ai true --ai-model qwen2.5:
 
 ## 6. 文档与诚实度
 
-- ❑ README 顶部实现状态表如实标注 eBPF 探针为"🚧 规划中"，未夸大为已实现
+- ❑ README 顶部实现状态表如实标注 CO-RE exec/exit + Ring Buffer 已实现，并把网络/LSM 阻断保留为规划项
 - ❑ README 徽章 `Rust-2024`，与 Cargo.toml 的 `edition = "2024"` 一致
 - ❑ USER_MANUAL 版本号 `v0.4.1`，描述了模糊哈希 / AI 安全门控 / 隔离区机制
 - ❑ 免责声明明确"实验性/教育性项目，不能替代商业杀毒"
@@ -184,7 +184,7 @@ cargo run --release -- --mode active --policy kill --ai true --ai-model qwen2.5:
 
 | 项 | 现状 | 说明 |
 |----|------|------|
-| eBPF 探针 | 未接入 | `bpf/probes.bpf.c` 已编写但未通过 libbpf-rs 加载；ebpf 运行时用 Netlink Connector |
+| eBPF 探针 | exec/exit 已接入 | libbpf-rs 加载 CO-RE skeleton 并消费 Ring Buffer；网络/LSM/提权仍未接入 |
 | core 跨平台 | 仅 Windows | core 用 Win32 API（ToolHelp32/TerminateProcess），Linux 上不编译（设计如此） |
 | 隔离区 CLI | 无 release/purge 子命令 | API 有 `release`/`purge` 方法，CLI 暂未暴露，需手动恢复 |
-| 进程监控盲区 | 轮询型 | core 每 N ms 轮询一次，短命进程（<轮询间隔）可能漏检；ebpf 的 Netlink 是事件驱动无此问题 |
+| 进程监控盲区 | Windows core 为轮询型 | core 可能漏检短命进程；Linux eBPF/Netlink 均为事件驱动 |

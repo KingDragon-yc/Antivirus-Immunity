@@ -1,6 +1,6 @@
 [package]
 name = "antivirus-immunity-ebpf"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.91"
 description = "eBPF-based cloud-native Linux security engine for Antivirus-Immunity"
@@ -22,20 +22,11 @@ nix = { version = "0.31", features = ["process", "signal", "user", "fs", "socket
 libc = "0.2"
 uuid = { version = "1.23", features = ["v4"] }
 
-# eBPF userspace library — CO-RE (Compile Once, Run Everywhere)
-# libbpf-rs provides safe Rust bindings for libbpf
-# NOTE: Requires libbpf + bpftool on the build machine.
-#       On target machines, only a BTF-enabled kernel is needed (5.4+).
-# libbpf-rs = "0.24"
-# libbpf-cargo = "0.24"
-
-# Placeholder: These deps will be uncommented when building on Linux.
-# For now, we define the architecture and userspace event processing pipeline.
-
 [target.'cfg(target_os = "linux")'.dependencies]
-# These will activate on Linux builds:
-# libbpf-rs = "0.24"
-# procfs = "0.17"  # Parse /proc filesystem
+libbpf-rs = "0.26.2"
+
+[target.'cfg(target_os = "linux")'.build-dependencies]
+libbpf-cargo = "0.26.2"
 
 [[bin]]
 name = "immunity-ebpf"

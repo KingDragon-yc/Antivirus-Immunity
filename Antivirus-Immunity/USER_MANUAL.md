@@ -3,7 +3,7 @@
 > **版本**: v0.4.1 | **最后更新**: 2026-06-18  
 > **适用平台**: Windows 10/11 (x86_64)
 >
-> 本手册描述 `antivirus-immunity-core`（Windows 端点引擎）的用法。Linux 云原生引擎 `antivirus-immunity-ebpf` 是独立二进制,其能力与实现状态见 [README](README.md) 的"实现状态"表(eBPF 探针当前为规划中,运行时实际使用 Netlink Connector)。
+> 本手册描述 `antivirus-immunity-core`（Windows 端点引擎）的用法。Linux 云原生引擎 `antivirus-immunity-ebpf` 是独立二进制，其能力与实现状态见 [README](README.md) 的“实现状态”表（CO-RE exec/exit 探针与 Ring Buffer 已接入；网络/LSM 阻断仍未实现）。
 
 ---
 
@@ -642,7 +642,7 @@ cargo run -- --mode monitor --interval 5000   # 每 5 秒扫描一次
 
 ### Q7: 支持 Linux / macOS 吗？
 
-**A**: 本手册描述的 `antivirus-immunity-core` **仅支持 Windows**(进程监控用 ToolHelp32,终止用 TerminateProcess)。项目另有 `antivirus-immunity-ebpf` 面向 Linux 云原生场景(进程事件走 Netlink Connector,AI 推迟阻断,容器感知),但 **eBPF 内核探针尚未接入**(规划中,见 README 实现状态表)。macOS 暂不支持。
+**A**: 本手册描述的 `antivirus-immunity-core` **仅支持 Windows**（进程监控用 ToolHelp32，终止用 TerminateProcess）。项目另有 `antivirus-immunity-ebpf` 面向 Linux 云原生场景（CO-RE exec/exit 探针、Ring Buffer、Netlink 降级、AI 推迟阻断、容器感知）。网络和 LSM 内核阻断尚未实现。macOS 暂不支持。
 
 ### Q8: 危险信号 (Danger Signal) 是什么意思？
 
