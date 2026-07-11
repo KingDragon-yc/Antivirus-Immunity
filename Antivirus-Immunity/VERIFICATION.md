@@ -25,7 +25,7 @@ git checkout v0.4.1        # 或 main 分支最新提交
 
 ### 1.1 Windows 构建（core + common）
 
-前置：Rust 1.85+（`rustup default stable`）、VS Build Tools（C++ + Windows SDK）。
+前置：Rust 1.91+（`rustup default stable`）、VS Build Tools（C++ + Windows SDK）。
 
 ```powershell
 cargo build --release -p antivirus-immunity-common -p antivirus-immunity-core

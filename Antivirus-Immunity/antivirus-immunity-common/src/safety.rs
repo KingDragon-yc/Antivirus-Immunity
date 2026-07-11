@@ -180,7 +180,7 @@ pub fn sanitize_field(s: &str) -> String {
 
 // ─── AI verdict post-processing (prompt-injection hardening) ───
 
-use crate::ai_cortex::{AiVerdict, ProcessContext};
+use crate::ai_cortex::{AiClassification, AiRecommendation, AiVerdict, ProcessContext};
 
 /// Evidence-keyword categories used by [`validate_safe_verdict`].
 ///
@@ -241,7 +241,7 @@ const EVIDENCE_BEHAVIOR_KEYWORDS: &[&str] = &[
 ///
 /// Returns `true` if the verdict was downgraded.
 pub fn validate_safe_verdict(verdict: &mut AiVerdict) -> bool {
-    if verdict.classification != "SAFE" {
+    if verdict.classification != AiClassification::Safe {
         return false;
     }
     let lower = verdict.reasoning.to_lowercase();
@@ -265,7 +265,7 @@ pub fn validate_safe_verdict(verdict: &mut AiVerdict) -> bool {
         return false;
     }
 
-    verdict.classification = "UNCERTAIN".to_string();
+    verdict.classification = AiClassification::Uncertain;
     if verdict.confidence > 0.5 {
         verdict.confidence = 0.5;
     }
@@ -273,7 +273,7 @@ pub fn validate_safe_verdict(verdict: &mut AiVerdict) -> bool {
         "{} [evidence-check: insufficient concrete signals cited for SAFE]",
         verdict.reasoning
     );
-    verdict.recommendation = "MONITOR".to_string();
+    verdict.recommendation = AiRecommendation::Monitor;
     true
 }
 
@@ -289,7 +289,7 @@ pub fn validate_safe_verdict(verdict: &mut AiVerdict) -> bool {
 ///
 /// Returns `true` if the verdict was downgraded.
 pub fn override_suspicious_safe(verdict: &mut AiVerdict, ctx: &ProcessContext) -> bool {
-    if verdict.classification != "SAFE" {
+    if verdict.classification != AiClassification::Safe {
         return false;
     }
     let high_conf = verdict.confidence >= 0.9;
@@ -299,8 +299,8 @@ pub fn override_suspicious_safe(verdict: &mut AiVerdict, ctx: &ProcessContext) -
         return false;
     }
 
-    verdict.classification = "SUSPICIOUS".to_string();
-    verdict.recommendation = "MONITOR".to_string();
+    verdict.classification = AiClassification::Suspicious;
+    verdict.recommendation = AiRecommendation::Monitor;
     verdict.reasoning = format!(
         "{} [auto-downgrade: SAFE at high confidence from non-trusted path with YARA match — suspicious combination]",
         verdict.reasoning
@@ -349,10 +349,10 @@ mod tests {
 
     fn safe_verdict(reasoning: &str, confidence: f64) -> crate::ai_cortex::AiVerdict {
         crate::ai_cortex::AiVerdict {
-            classification: "SAFE".to_string(),
+            classification: AiClassification::Safe,
             confidence,
             reasoning: reasoning.to_string(),
-            recommendation: "ALLOW".to_string(),
+            recommendation: AiRecommendation::Allow,
         }
     }
 
@@ -363,7 +363,7 @@ mod tests {
             0.9,
         );
         assert!(!validate_safe_verdict(&mut v));
-        assert_eq!(v.classification, "SAFE");
+        assert_eq!(v.classification, AiClassification::Safe);
         assert_eq!(v.confidence, 0.9); // untouched
     }
 
@@ -371,7 +371,7 @@ mod tests {
     fn safe_with_only_vague_reasoning_is_downgraded() {
         let mut v = safe_verdict("looks fine, nothing suspicious here", 0.95);
         assert!(validate_safe_verdict(&mut v));
-        assert_eq!(v.classification, "UNCERTAIN");
+        assert_eq!(v.classification, AiClassification::Uncertain);
         assert!(v.confidence <= 0.5);
         assert!(v.reasoning.contains("evidence-check"));
     }
@@ -380,7 +380,7 @@ mod tests {
     fn safe_with_empty_reasoning_is_downgraded() {
         let mut v = safe_verdict("", 0.9);
         assert!(validate_safe_verdict(&mut v));
-        assert_eq!(v.classification, "UNCERTAIN");
+        assert_eq!(v.classification, AiClassification::Uncertain);
     }
 
     #[test]
@@ -389,19 +389,19 @@ mod tests {
         // it is insufficient.
         let mut v = safe_verdict("This is a legitimate process", 0.9);
         assert!(validate_safe_verdict(&mut v));
-        assert_eq!(v.classification, "UNCERTAIN");
+        assert_eq!(v.classification, AiClassification::Uncertain);
     }
 
     #[test]
     fn validate_only_applies_to_safe() {
         let mut v = crate::ai_cortex::AiVerdict {
-            classification: "MALICIOUS".to_string(),
+            classification: AiClassification::Malicious,
             confidence: 0.99,
             reasoning: "evil".to_string(),
-            recommendation: "TERMINATE".to_string(),
+            recommendation: AiRecommendation::Terminate,
         };
         assert!(!validate_safe_verdict(&mut v));
-        assert_eq!(v.classification, "MALICIOUS"); // untouched
+        assert_eq!(v.classification, AiClassification::Malicious); // untouched
     }
 
     // ─── override_suspicious_safe ───
@@ -429,8 +429,8 @@ mod tests {
         let mut v = safe_verdict("model says safe", 0.95);
         let c = ctx("/tmp/evil", &["Test_Malware"]);
         assert!(override_suspicious_safe(&mut v, &c));
-        assert_eq!(v.classification, "SUSPICIOUS");
-        assert_eq!(v.recommendation, "MONITOR");
+        assert_eq!(v.classification, AiClassification::Suspicious);
+        assert_eq!(v.recommendation, AiRecommendation::Monitor);
         assert!(v.reasoning.contains("auto-downgrade"));
     }
 
@@ -440,7 +440,7 @@ mod tests {
         let mut v = safe_verdict("safe", 0.95);
         let c = ctx("/usr/bin/ls", &["SomeRule"]);
         assert!(!override_suspicious_safe(&mut v, &c));
-        assert_eq!(v.classification, "SAFE");
+        assert_eq!(v.classification, AiClassification::Safe);
     }
 
     #[test]
@@ -448,7 +448,7 @@ mod tests {
         let mut v = safe_verdict("safe", 0.95);
         let c = ctx("/tmp/x", &[]);
         assert!(!override_suspicious_safe(&mut v, &c));
-        assert_eq!(v.classification, "SAFE");
+        assert_eq!(v.classification, AiClassification::Safe);
     }
 
     #[test]
@@ -456,16 +456,16 @@ mod tests {
         let mut v = safe_verdict("safe", 0.85);
         let c = ctx("/tmp/x", &["Rule"]);
         assert!(!override_suspicious_safe(&mut v, &c));
-        assert_eq!(v.classification, "SAFE");
+        assert_eq!(v.classification, AiClassification::Safe);
     }
 
     #[test]
     fn override_only_applies_to_safe() {
         let mut v = crate::ai_cortex::AiVerdict {
-            classification: "MALICIOUS".to_string(),
+            classification: AiClassification::Malicious,
             confidence: 0.99,
             reasoning: "evil".to_string(),
-            recommendation: "TERMINATE".to_string(),
+            recommendation: AiRecommendation::Terminate,
         };
         let c = ctx("/tmp/x", &["Rule"]);
         assert!(!override_suspicious_safe(&mut v, &c));

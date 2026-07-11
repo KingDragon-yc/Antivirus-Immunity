@@ -9,7 +9,6 @@
 //! - 非阻塞：异步 HTTP 请求
 //! - 可审计：所有判断附带推理链
 
-use crate::safety::truncate_chars;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -31,12 +30,55 @@ impl Default for AiCortexConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AiClassification {
+    Safe,
+    Suspicious,
+    Malicious,
+    Uncertain,
+}
+
+impl std::fmt::Display for AiClassification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Safe => "SAFE",
+            Self::Suspicious => "SUSPICIOUS",
+            Self::Malicious => "MALICIOUS",
+            Self::Uncertain => "UNCERTAIN",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AiRecommendation {
+    Allow,
+    Monitor,
+    Quarantine,
+    Terminate,
+}
+
+impl std::fmt::Display for AiRecommendation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Allow => "ALLOW",
+            Self::Monitor => "MONITOR",
+            Self::Quarantine => "QUARANTINE",
+            Self::Terminate => "TERMINATE",
+        };
+        f.write_str(value)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AiVerdict {
-    pub classification: String,
+    pub classification: AiClassification,
     pub confidence: f64,
     pub reasoning: String,
-    pub recommendation: String,
+    pub recommendation: AiRecommendation,
 }
 
 #[derive(Serialize)]
@@ -286,7 +328,7 @@ strong indicator of malicious intent.
 
         // Direct JSON parse
         if let Ok(v) = serde_json::from_str::<AiVerdict>(trimmed) {
-            return Some(v);
+            return Self::validate_contract(v);
         }
 
         // Extract JSON from markdown wrapping
@@ -294,34 +336,94 @@ strong indicator of malicious intent.
             && let Some(end) = trimmed.rfind('}')
             && let Ok(v) = serde_json::from_str::<AiVerdict>(&trimmed[start..=end])
         {
-            return Some(v);
+            return Self::validate_contract(v);
         }
 
-        // Keyword fallback
-        let lower = trimmed.to_lowercase();
-        let classification = if lower.contains("malicious") || lower.contains("malware") {
-            "MALICIOUS"
-        } else if lower.contains("suspicious") {
-            "SUSPICIOUS"
-        } else if lower.contains("safe") || lower.contains("benign") {
-            "SAFE"
-        } else {
-            "UNCERTAIN"
-        };
+        // The prompt requires strict JSON. Unstructured/partially parsed output
+        // is treated as AI failure so callers fall back to deterministic rules;
+        // keyword guessing would let attacker-controlled prose choose an action.
+        None
+    }
 
-        Some(AiVerdict {
-            classification: classification.to_string(),
-            confidence: 0.5,
-            reasoning: format!("(Unstructured) {}", truncate_chars(trimmed, 300)),
-            recommendation: match classification {
-                "MALICIOUS" => "TERMINATE".to_string(),
-                "SUSPICIOUS" => "MONITOR".to_string(),
-                _ => "ALLOW".to_string(),
+    /// Validate numeric bounds and make the action consistent with the
+    /// classification. Callers may therefore execute only this normalized
+    /// recommendation instead of trusting a second, contradictory model field.
+    fn validate_contract(mut verdict: AiVerdict) -> Option<AiVerdict> {
+        if !verdict.confidence.is_finite() || !(0.0..=1.0).contains(&verdict.confidence) {
+            return None;
+        }
+        verdict.recommendation = match verdict.classification {
+            AiClassification::Safe => AiRecommendation::Allow,
+            AiClassification::Suspicious | AiClassification::Uncertain => AiRecommendation::Monitor,
+            AiClassification::Malicious => match verdict.recommendation {
+                AiRecommendation::Quarantine => AiRecommendation::Quarantine,
+                _ => AiRecommendation::Terminate,
             },
-        })
+        };
+        Some(verdict)
     }
 
     pub fn is_available(&self) -> bool {
         self.available
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn verdict(
+        classification: AiClassification,
+        recommendation: AiRecommendation,
+        confidence: f64,
+    ) -> AiVerdict {
+        AiVerdict {
+            classification,
+            confidence,
+            reasoning: "test".to_string(),
+            recommendation,
+        }
+    }
+
+    #[test]
+    fn contradictory_allow_for_malicious_is_normalized_to_terminate() {
+        let value = AiCortex::validate_contract(verdict(
+            AiClassification::Malicious,
+            AiRecommendation::Allow,
+            0.9,
+        ))
+        .expect("valid verdict");
+        assert_eq!(value.recommendation, AiRecommendation::Terminate);
+    }
+
+    #[test]
+    fn contradictory_terminate_for_safe_is_normalized_to_allow() {
+        let value = AiCortex::validate_contract(verdict(
+            AiClassification::Safe,
+            AiRecommendation::Terminate,
+            0.9,
+        ))
+        .expect("valid verdict");
+        assert_eq!(value.recommendation, AiRecommendation::Allow);
+    }
+
+    #[test]
+    fn invalid_confidence_is_rejected() {
+        assert!(
+            AiCortex::validate_contract(verdict(
+                AiClassification::Malicious,
+                AiRecommendation::Terminate,
+                1.1,
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn lowercase_enum_json_cannot_bypass_typed_contract() {
+        let raw = r#"{"classification":"safe","confidence":0.99,"reasoning":"x","recommendation":"ALLOW"}"#;
+        assert!(serde_json::from_str::<AiVerdict>(raw).is_err());
+        let cortex = AiCortex::new(AiCortexConfig::default());
+        assert!(cortex.parse_verdict(raw).is_none());
     }
 }

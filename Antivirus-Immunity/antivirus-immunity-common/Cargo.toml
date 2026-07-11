@@ -2,6 +2,7 @@
 name = "antivirus-immunity-common"
 version = "0.4.0"
 edition = "2024"
+rust-version = "1.91"
 description = "Cross-platform shared types and utilities for Antivirus-Immunity"
 authors = ["KingDragon-yc"]
 

@@ -32,7 +32,7 @@
 | **CPU** | 双核 | 四核以上（AI 分析需要更多算力） |
 | **内存** | 4GB | 8GB+（Ollama 模型加载需要额外内存） |
 | **磁盘** | 500MB（构建工具链 + 项目） | 5GB+（含 AI 模型文件） |
-| **Rust 工具链** | 1.85+(edition 2024) | latest stable |
+| **Rust 工具链** | 1.91+（edition 2024；由 yara-x 1.17 要求） | latest stable |
 | **Ollama**（可选） | v0.1+ | latest |
 
 ### 必须安装的软件
@@ -77,6 +77,8 @@ antivirus-immunity-core/target/release/antivirus-immunity-core.exe
 cd antivirus-immunity-core
 cargo run -- --help
 ```
+
+> **数据目录**：v0.4.1 加固版不再把状态写到当前工作目录。默认目录为 `<可执行文件目录>/data`，可通过 `--data-dir <绝对路径>` 或 `ANTIVIRUS_IMMUNITY_DATA_DIR` 覆盖。YARA 规则已嵌入二进制。旧版工作目录中的 `immunity_db.json`、`logs/`、`quarantine/` 需审核后手动迁移。
 
 ### 验证安装
 

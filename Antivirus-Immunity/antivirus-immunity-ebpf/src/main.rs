@@ -49,7 +49,7 @@ mod procfs;
 mod resource_aware;
 
 use antivirus_immunity_common::{
-    ai_cortex::{AiCortex, AiCortexConfig},
+    ai_cortex::{AiCortex, AiCortexConfig, AiRecommendation},
     event::{DangerLevel, SecurityEvent, SecurityEventType, Severity},
     logger::Logger,
 };
@@ -460,6 +460,7 @@ async fn main() -> anyhow::Result<()> {
                         let pid = event.pid;
                         let comm = event.comm.clone();
                         let detail_clone = detail.clone();
+                        #[cfg(target_os = "linux")]
                         let proc_start_for_task = proc_start;
                         // Clone the tracker so the deferred task can remove the
                         // PID once it SIGCONTs/SIGKILLs it (frees it from the
@@ -505,8 +506,9 @@ async fn main() -> anyhow::Result<()> {
                                         verdict.recommendation,
                                     );
 
-                                    let action = match verdict.recommendation.as_str() {
-                                        "TERMINATE" | "BLOCK" => {
+                                    let action = match verdict.recommendation {
+                                        AiRecommendation::Terminate
+                                        | AiRecommendation::Quarantine => {
                                             // P0-2 safety gate: a small local model can
                                             // hallucinate, and killing a critical system
                                             // process is far worse than a miss. Mirror the
@@ -548,7 +550,7 @@ async fn main() -> anyhow::Result<()> {
                                                 "SUPPRESSED"
                                             }
                                         }
-                                        _ => {
+                                        AiRecommendation::Allow | AiRecommendation::Monitor => {
                                             // SAFE/ALLOW/MONITOR: resume the process
                                             println!("    [✓] AI: Resuming PID {}...", pid);
                                             #[cfg(target_os = "linux")]

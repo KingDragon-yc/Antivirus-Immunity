@@ -15,7 +15,8 @@ use std::time::SystemTime;
 struct CacheKey {
     path: String,
     size: u64,
-    modified: u64,
+    modified_nanos: u128,
+    created_nanos: u128,
 }
 
 pub struct HashCache {
@@ -35,35 +36,35 @@ impl HashCache {
     }
 
     pub fn get_or_compute(&mut self, path: &str) -> Result<String> {
-        let key = self.make_key(path)?;
+        let mut file = File::open(path)?;
+        let key = Self::make_key(path, &file.metadata()?);
         if let Some(hash) = self.cache.get(&key) {
             self.hits += 1;
             return Ok(hash.clone());
         }
         self.misses += 1;
-        let hash = Self::compute_sha256(path)?;
+        let hash = Self::compute_sha256(&mut file)?;
+        let key_after = Self::make_key(path, &file.metadata()?);
+        if key != key_after {
+            return Err(anyhow::anyhow!(
+                "File changed while hashing; refusing unstable digest: {}",
+                path
+            ));
+        }
         self.cache.put(key, hash.clone());
         Ok(hash)
     }
 
-    fn make_key(&self, path: &str) -> Result<CacheKey> {
-        let metadata = fs::metadata(path)?;
-        let size = metadata.len();
-        let modified = metadata
-            .modified()
-            .unwrap_or(SystemTime::UNIX_EPOCH)
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        Ok(CacheKey {
+    fn make_key(path: &str, metadata: &fs::Metadata) -> CacheKey {
+        CacheKey {
             path: path.to_string(),
-            size,
-            modified,
-        })
+            size: metadata.len(),
+            modified_nanos: timestamp_nanos(metadata.modified()),
+            created_nanos: timestamp_nanos(metadata.created()),
+        }
     }
 
-    fn compute_sha256(path: &str) -> Result<String> {
-        let mut file = File::open(path)?;
+    fn compute_sha256(file: &mut File) -> Result<String> {
         let mut hasher = Sha256::new();
         let mut buf = [0u8; 8192];
         loop {
@@ -93,4 +94,12 @@ impl HashCache {
             self.hit_ratio() * 100.0,
         )
     }
+}
+
+fn timestamp_nanos(value: std::io::Result<SystemTime>) -> u128 {
+    value
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
 }

@@ -51,7 +51,10 @@ pub struct Logger {
 
 impl Logger {
     pub fn new() -> anyhow::Result<Self> {
-        let log_dir = PathBuf::from(LOG_DIR);
+        Self::with_dir(PathBuf::from(LOG_DIR))
+    }
+
+    pub fn with_dir(log_dir: PathBuf) -> anyhow::Result<Self> {
         fs::create_dir_all(&log_dir)?;
 
         let current_log = log_dir.join("immunity.jsonl");

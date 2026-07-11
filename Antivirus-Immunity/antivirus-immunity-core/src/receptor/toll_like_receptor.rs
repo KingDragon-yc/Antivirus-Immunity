@@ -1,11 +1,11 @@
 use anyhow::Result;
 use std::collections::HashSet;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, MAX_PATH};
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, MAX_PATH};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32, Process32First, Process32Next, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+    GetProcessTimes, OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
     QueryFullProcessImageNameA,
 };
 
@@ -68,13 +68,15 @@ impl TollLikeReceptor {
                 loop {
                     let pid = entry.th32ProcessID;
                     let name = Self::extract_name(&entry);
-                    let (path, hash) = self.get_process_details(pid).unwrap_or((None, None));
+                    let (path, hash, creation_time) =
+                        self.get_process_details(pid).unwrap_or((None, None, None));
 
                     processes.push(ProcessInfo {
                         pid,
                         name,
                         path,
                         hash,
+                        creation_time,
                     });
 
                     current_pids.insert(pid);
@@ -124,13 +126,15 @@ impl TollLikeReceptor {
         for (pid, entry) in all_current_pids {
             if !self.known_pids.contains(&pid) {
                 let name = Self::extract_name(&entry);
-                let (path, hash) = self.get_process_details(pid).unwrap_or((None, None));
+                let (path, hash, creation_time) =
+                    self.get_process_details(pid).unwrap_or((None, None, None));
 
                 new_processes.push(ProcessInfo {
                     pid,
                     name,
                     path,
                     hash,
+                    creation_time,
                 });
             }
         }
@@ -158,7 +162,10 @@ impl TollLikeReceptor {
     }
 
     /// Get process path and hash with RAII handle management
-    fn get_process_details(&mut self, pid: u32) -> Option<(Option<String>, Option<String>)> {
+    fn get_process_details(
+        &mut self,
+        pid: u32,
+    ) -> Option<(Option<String>, Option<String>, Option<u64>)> {
         unsafe {
             let handle = SafeHandle::new(
                 OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid).ok()?,
@@ -174,16 +181,28 @@ impl TollLikeReceptor {
                 &mut size,
             )
             .is_ok();
+            let creation_time = Self::read_creation_time(handle.raw());
             // SafeHandle Drop handles CloseHandle automatically
 
             if success {
                 let path = String::from_utf8_lossy(&buffer[..size as usize]).to_string();
                 // Use cached hash computation
                 let hash = self.hash_cache.get_or_compute(&path).ok();
-                return Some((Some(path), hash));
+                return Some((Some(path), hash, creation_time));
             }
+            Some((None, None, creation_time))
         }
-        None
+    }
+
+    fn read_creation_time(handle: HANDLE) -> Option<u64> {
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        unsafe {
+            GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user).ok()?;
+        }
+        Some(((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64)
     }
 
     /// Get hash cache statistics
@@ -198,4 +217,7 @@ pub struct ProcessInfo {
     pub name: String,
     pub path: Option<String>,
     pub hash: Option<String>,
+    /// Windows process creation timestamp (100ns ticks since 1601). Combined
+    /// with PID to reject destructive actions after PID reuse.
+    pub creation_time: Option<u64>,
 }

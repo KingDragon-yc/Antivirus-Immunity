@@ -13,7 +13,6 @@
 
 use crate::probe::{ProbeType, RawProbeEvent};
 use anyhow::Result;
-use std::collections::HashSet;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
@@ -23,6 +22,7 @@ const NLMSG_NOOP: u16 = 0x1;
 const NLMSG_ERROR: u16 = 0x2;
 const NLMSG_DONE: u16 = 0x3;
 const NLMSG_OVERHEAD: usize = 16;
+const NLMSG_ALIGNTO: usize = 4;
 
 // ─── Connector constants ───
 const CN_IDX_PROC: u32 = 0x1;
@@ -71,19 +71,7 @@ struct CnMsg {
     flags: u16,
 }
 
-/// struct proc_event — Process event body (simplified: fork/exec/exit fields)
-///
-/// Full struct from linux/cn_proc.h is ~500 bytes, but we only need the
-/// common fields at the top + the PID fields from each variant.
-#[repr(C)]
-#[derive(Debug)]
-struct ProcEvent {
-    what: u32,
-    cpu: u32,
-    timestamp_ns: u64,
-}
-
-/// After ProcEvent header, the union starts. We overlay a raw byte buffer.
+/// After the proc_event header, the event-specific union payload starts.
 const PROC_EVENT_HDR_SIZE: usize = 16;
 
 /// struct sockaddr_nl — Netlink socket address
@@ -98,7 +86,6 @@ struct SockAddrNl {
 /// Netlink Connector listener — wraps an AF_NETLINK socket subscribed to CN_IDX_PROC
 pub struct NetlinkConnector {
     fd: OwnedFd,
-    known_pids: HashSet<u32>,
 }
 
 impl NetlinkConnector {
@@ -149,20 +136,23 @@ impl NetlinkConnector {
             tv_sec: 0,
             tv_usec: 100_000, // 100ms
         };
-        unsafe {
+        let timeout_ret = unsafe {
             libc::setsockopt(
                 fd.as_raw_fd(),
                 libc::SOL_SOCKET,
                 libc::SO_RCVTIMEO,
                 &tv as *const libc::timeval as *const libc::c_void,
                 std::mem::size_of::<libc::timeval>() as u32,
-            );
+            )
+        };
+        if timeout_ret < 0 {
+            return Err(anyhow::anyhow!(
+                "setsockopt(SO_RCVTIMEO) failed: {}",
+                io::Error::last_os_error()
+            ));
         }
 
-        Ok(Self {
-            fd,
-            known_pids: HashSet::new(),
-        })
+        Ok(Self { fd })
     }
 
     /// Send a PROC_CN_MCAST_LISTEN message to start/stop receiving events.
@@ -238,6 +228,13 @@ impl NetlinkConnector {
                 io::Error::last_os_error()
             ));
         }
+        if sent as usize != buf.len() {
+            return Err(anyhow::anyhow!(
+                "short send for PROC_CN_MCAST_LISTEN: {} of {} bytes",
+                sent,
+                buf.len()
+            ));
+        }
         Ok(())
     }
 
@@ -295,53 +292,14 @@ impl NetlinkConnector {
             // 发送伪造的 PROC_EVENT_* 消息,从而触发引擎对任意 PID 发出
             // SIGSTOP/SIGKILL —— 这构成权限提升 / DoS 原语(让安全引擎去
             // 杀掉防病毒自身或关键服务)。任何非内核来源的消息一律丢弃。
-            if addr.nl_pid != 0 {
+            if addr_len < std::mem::size_of::<SockAddrNl>() as libc::socklen_t
+                || addr.nl_family != libc::AF_NETLINK as libc::sa_family_t
+                || addr.nl_pid != 0
+            {
                 continue;
             }
 
-            if received < NLMSG_OVERHEAD {
-                break;
-            }
-
-            // Parse all nlmsghdr-delimited messages in the buffer
-            let mut offset = 0usize;
-            while offset + NLMSG_OVERHEAD <= received {
-                let hdr = unsafe { &*(buf.as_ptr().add(offset) as *const NlMsgHdr) };
-                let msg_len = hdr.nlmsg_len as usize;
-                if msg_len < NLMSG_OVERHEAD || offset + msg_len > received {
-                    break;
-                }
-
-                match hdr.nlmsg_type {
-                    NLMSG_DONE => {
-                        // Parse cn_msg + proc_event
-                        let cn_offset = offset + NLMSG_OVERHEAD;
-                        if cn_offset + std::mem::size_of::<CnMsg>() <= received {
-                            let cn = unsafe { &*(buf.as_ptr().add(cn_offset) as *const CnMsg) };
-                            if cn.id.idx == CN_IDX_PROC && cn.id.val == CN_VAL_PROC {
-                                let data_offset = cn_offset + std::mem::size_of::<CnMsg>();
-                                let data_len = cn.len as usize;
-                                if data_offset + PROC_EVENT_HDR_SIZE <= received
-                                    && data_len >= PROC_EVENT_HDR_SIZE
-                                {
-                                    let ev = self.parse_proc_event(
-                                        &buf[data_offset..data_offset + data_len],
-                                    );
-                                    if let Some(e) = ev {
-                                        events.push(e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    NLMSG_ERROR => {
-                        // Ignore errors from kernel
-                    }
-                    _ => {}
-                }
-
-                offset += msg_len;
-            }
+            events.extend(Self::parse_netlink_datagram(&buf[..received]));
 
             // If we got events, return them; otherwise loop for more (with timeout)
             if !events.is_empty() {
@@ -354,32 +312,85 @@ impl NetlinkConnector {
     }
 
     /// Parse a proc_event byte slice into a RawProbeEvent.
-    fn parse_proc_event(&mut self, data: &[u8]) -> Option<RawProbeEvent> {
+    fn parse_netlink_datagram(buf: &[u8]) -> Vec<RawProbeEvent> {
+        let mut events = Vec::new();
+        let mut offset = 0usize;
+
+        while let Some(header_end) = offset.checked_add(NLMSG_OVERHEAD) {
+            if header_end > buf.len() {
+                break;
+            }
+
+            let msg_len = match read_u32(buf, offset) {
+                Some(v) => v as usize,
+                None => break,
+            };
+            let msg_type = match read_u16(buf, offset + 4) {
+                Some(v) => v,
+                None => break,
+            };
+            let msg_end = match offset.checked_add(msg_len) {
+                Some(end) if msg_len >= NLMSG_OVERHEAD && end <= buf.len() => end,
+                _ => break,
+            };
+
+            if msg_type == NLMSG_DONE {
+                let cn_offset = header_end;
+                let cn_end = match cn_offset.checked_add(std::mem::size_of::<CnMsg>()) {
+                    Some(end) if end <= msg_end => end,
+                    _ => break,
+                };
+                let idx = read_u32(buf, cn_offset);
+                let val = read_u32(buf, cn_offset + 4);
+                let data_len = read_u16(buf, cn_offset + 16).map(usize::from);
+
+                if idx == Some(CN_IDX_PROC)
+                    && val == Some(CN_VAL_PROC)
+                    && let Some(data_len) = data_len
+                    && data_len >= PROC_EVENT_HDR_SIZE
+                    && let Some(data_end) = cn_end.checked_add(data_len)
+                    && data_end <= msg_end
+                    && let Some(event) = Self::parse_proc_event_data(&buf[cn_end..data_end])
+                {
+                    events.push(event);
+                }
+            } else if msg_type == NLMSG_ERROR {
+                // Kernel error messages are not process events.
+            }
+
+            let aligned = match msg_len.checked_add(NLMSG_ALIGNTO - 1) {
+                Some(v) => v & !(NLMSG_ALIGNTO - 1),
+                None => break,
+            };
+            offset = match offset.checked_add(aligned) {
+                Some(next) if next > offset => next,
+                _ => break,
+            };
+        }
+
+        events
+    }
+
+    /// Parse one connector event.
+    ///
+    /// FORK must not be emitted as EXEC: the child has not executed its target
+    /// image yet. EXEC notifications are deliberately not de-duplicated because
+    /// one process can successfully exec more than once without changing TGID.
+    fn parse_proc_event_data(data: &[u8]) -> Option<RawProbeEvent> {
         if data.len() < PROC_EVENT_HDR_SIZE {
             return None;
         }
-        let ev = unsafe { &*(data.as_ptr() as *const ProcEvent) };
+        // Decode the discriminant from bytes instead of creating a potentially
+        // unaligned `&ProcEvent` at the cn_msg payload offset.
+        let what = u32::from_ne_bytes(data[0..4].try_into().ok()?);
 
-        match ev.what {
+        match what {
             PROC_EVENT_FORK => {
-                // fork: parent_pid, parent_tgid, child_pid, child_tgid (4×i32 = 16 bytes)
-                let payload = &data[PROC_EVENT_HDR_SIZE..];
-                if payload.len() < 16 {
-                    return None;
-                }
-                let child_pid = i32::from_ne_bytes(payload[8..12].try_into().ok()?) as u32;
-                let parent_pid = i32::from_ne_bytes(payload[0..4].try_into().ok()?) as u32;
-                self.known_pids.insert(child_pid);
-                Some(RawProbeEvent {
-                    pid: child_pid,
-                    ppid: parent_pid,
-                    comm: String::new(),
-                    path: String::new(),
-                    event_type: ProbeType::Execve,
-                    detail: format!("fork: child_pid={}", child_pid),
-                    cgroup_id: 0,
-                    ns_pid: child_pid,
-                })
+                // A fork is not an exec. Emitting it as Execve gives policy an
+                // empty path/comm and, worse, marking the child as known drops
+                // the real EXEC event that follows. Process-tree bookkeeping
+                // can consume FORK separately once ProbeType gains that event.
+                None
             }
             PROC_EVENT_EXEC => {
                 // exec: process_pid, process_tgid (2×i32 = 8 bytes)
@@ -387,11 +398,12 @@ impl NetlinkConnector {
                 if payload.len() < 8 {
                     return None;
                 }
-                let pid = i32::from_ne_bytes(payload[0..4].try_into().ok()?) as u32;
-                if self.known_pids.contains(&pid) {
-                    return None; // Already seen (from fork)
+                let thread_pid = i32::from_ne_bytes(payload[0..4].try_into().ok()?);
+                let process_tgid = i32::from_ne_bytes(payload[4..8].try_into().ok()?);
+                if thread_pid <= 0 || process_tgid <= 0 {
+                    return None;
                 }
-                self.known_pids.insert(pid);
+                let pid = process_tgid as u32;
 
                 // Enrich with /proc data since Netlink gives bare PIDs
                 let comm = Self::read_proc_comm(pid);
@@ -415,8 +427,12 @@ impl NetlinkConnector {
                 if payload.len() < 8 {
                     return None;
                 }
-                let pid = i32::from_ne_bytes(payload[0..4].try_into().ok()?) as u32;
-                self.known_pids.remove(&pid);
+                let process_pid = i32::from_ne_bytes(payload[0..4].try_into().ok()?);
+                let process_tgid = i32::from_ne_bytes(payload[4..8].try_into().ok()?);
+                if process_pid <= 0 || process_tgid <= 0 || process_pid != process_tgid {
+                    return None;
+                }
+                let pid = process_tgid as u32;
                 Some(RawProbeEvent {
                     pid,
                     ppid: 0,
@@ -494,6 +510,95 @@ impl NetlinkConnector {
 
     pub fn raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
+    }
+}
+
+fn read_u16(buf: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    Some(u16::from_ne_bytes(buf.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u32(buf: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    Some(u32::from_ne_bytes(buf.get(offset..end)?.try_into().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event_bytes(what: u32, payload_words: &[i32]) -> Vec<u8> {
+        let mut data = vec![0u8; PROC_EVENT_HDR_SIZE];
+        data[0..4].copy_from_slice(&what.to_ne_bytes());
+        for word in payload_words {
+            data.extend_from_slice(&word.to_ne_bytes());
+        }
+        data
+    }
+
+    fn netlink_datagram(event: &[u8]) -> Vec<u8> {
+        let total_len = NLMSG_OVERHEAD + std::mem::size_of::<CnMsg>() + event.len();
+        let mut data = vec![0u8; total_len];
+        data[0..4].copy_from_slice(&(total_len as u32).to_ne_bytes());
+        data[4..6].copy_from_slice(&NLMSG_DONE.to_ne_bytes());
+        let cn = NLMSG_OVERHEAD;
+        data[cn..cn + 4].copy_from_slice(&CN_IDX_PROC.to_ne_bytes());
+        data[cn + 4..cn + 8].copy_from_slice(&CN_VAL_PROC.to_ne_bytes());
+        data[cn + 16..cn + 18].copy_from_slice(&(event.len() as u16).to_ne_bytes());
+        let payload = cn + std::mem::size_of::<CnMsg>();
+        data[payload..].copy_from_slice(event);
+        data
+    }
+
+    #[test]
+    fn fork_does_not_emit_exec() {
+        let fork = event_bytes(PROC_EVENT_FORK, &[10, 10, 20, 20]);
+
+        assert!(NetlinkConnector::parse_proc_event_data(&fork).is_none());
+    }
+
+    #[test]
+    fn exec_after_fork_and_reexec_are_both_emitted_by_tgid() {
+        let fork = event_bytes(PROC_EVENT_FORK, &[10, 10, 21, 20]);
+        let exec = event_bytes(PROC_EVENT_EXEC, &[21, 20]);
+
+        assert!(NetlinkConnector::parse_proc_event_data(&fork).is_none());
+        let emitted = NetlinkConnector::parse_proc_event_data(&exec)
+            .expect("the successful EXEC must not be suppressed by FORK");
+        assert_eq!(emitted.pid, 20);
+        assert!(NetlinkConnector::parse_proc_event_data(&exec).is_some());
+    }
+
+    #[test]
+    fn thread_exit_is_not_reported_as_process_exit() {
+        let thread_exit = event_bytes(PROC_EVENT_EXIT, &[21, 20]);
+        let process_exit = event_bytes(PROC_EVENT_EXIT, &[20, 20]);
+
+        assert!(NetlinkConnector::parse_proc_event_data(&thread_exit).is_none());
+        let emitted = NetlinkConnector::parse_proc_event_data(&process_exit)
+            .expect("thread-group leader exit should be emitted");
+        assert_eq!(emitted.pid, 20);
+    }
+
+    #[test]
+    fn datagram_rejects_cn_length_past_message_boundary() {
+        let event = event_bytes(PROC_EVENT_EXEC, &[20, 20]);
+        let mut datagram = netlink_datagram(&event);
+        let cn_len = NLMSG_OVERHEAD + 16;
+        datagram[cn_len..cn_len + 2].copy_from_slice(&u16::MAX.to_ne_bytes());
+
+        assert!(NetlinkConnector::parse_netlink_datagram(&datagram).is_empty());
+    }
+
+    #[test]
+    fn datagram_rejects_truncated_and_unaligned_headers_without_panicking() {
+        for len in 0..NLMSG_OVERHEAD {
+            assert!(NetlinkConnector::parse_netlink_datagram(&vec![0xff; len]).is_empty());
+        }
+
+        let mut malformed = vec![0u8; NLMSG_OVERHEAD];
+        malformed[0..4].copy_from_slice(&u32::MAX.to_ne_bytes());
+        assert!(NetlinkConnector::parse_netlink_datagram(&malformed).is_empty());
     }
 }
 

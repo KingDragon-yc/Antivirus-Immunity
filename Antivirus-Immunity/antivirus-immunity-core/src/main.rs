@@ -3,14 +3,16 @@ mod immune;
 mod logger;
 mod receptor;
 
+use anyhow::Context;
 use chrono::Utc;
 use clap::Parser;
 use effector::cytotoxic_t_cell::{CytotoxicTCell, ResponseAction};
 use effector::quarantine::Quarantine;
-use immune::{AiCortex, AiCortexConfig, ProcessContext};
+use immune::{AiCortex, AiCortexConfig, AiRecommendation, ProcessContext};
 use immune::{Assessment, DangerTheoryEngine, ImmuneSystem};
 use logger::{EventType, Logger, SecurityEvent};
 use receptor::toll_like_receptor::TollLikeReceptor;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -69,16 +71,38 @@ struct Args {
     /// Monitoring poll interval in milliseconds
     #[arg(long, default_value = "500")]
     interval: u64,
+
+    /// Persistent state directory. Defaults to <executable-dir>/data; can also
+    /// be set with ANTIVIRUS_IMMUNITY_DATA_DIR.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+}
+
+fn resolve_data_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    let dir = if let Some(dir) = explicit {
+        dir
+    } else if let Some(dir) = std::env::var_os("ANTIVIRUS_IMMUNITY_DATA_DIR") {
+        PathBuf::from(dir)
+    } else {
+        let executable = std::env::current_exe()?;
+        executable
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Executable path has no parent directory"))?
+            .join("data")
+    };
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.canonicalize()?)
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let data_dir = resolve_data_dir(args.data_dir.clone())?;
 
     // Initialize Logger. If the log directory cannot be created (e.g. read-only
     // filesystem or insufficient permissions), fall back to an in-memory logger
     // that drops events rather than re-trying the same failing call and panicking.
-    let logger = Logger::new().unwrap_or_else(|e| {
+    let logger = Logger::with_dir(data_dir.join("logs")).unwrap_or_else(|e| {
         eprintln!(
             "[!] Failed to initialize logger: {}. Continuing without file logging.",
             e
@@ -95,10 +119,19 @@ async fn main() -> anyhow::Result<()> {
     let quarantine_list_mode = args.mode == "quarantine-list";
 
     // Initialize Immune System Components
-    let mut immune_system = ImmuneSystem::new();
+    let mut immune_system = ImmuneSystem::new(&data_dir);
     let mut receptor = TollLikeReceptor::new();
     let mut danger_engine = DangerTheoryEngine::new();
-    let mut quarantine = Quarantine::new().ok();
+    let mut quarantine = match Quarantine::with_dir(data_dir.join("quarantine")) {
+        Ok(q) => Some(q),
+        Err(e) if quarantine_mode || quarantine_list_mode => {
+            return Err(e).context("Quarantine is required by the selected mode/policy");
+        }
+        Err(e) => {
+            eprintln!("[!] Quarantine disabled: {}", e);
+            None
+        }
+    };
 
     println!();
     println!("╔══════════════════════════════════════════════════════════════╗");
@@ -106,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
     println!("║          Biological Architecture + AI Cortex                ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
+    println!("Data directory: {}", data_dir.display());
 
     // ==================== QUARANTINE LIST MODE ====================
     if quarantine_list_mode {
@@ -341,9 +375,9 @@ async fn main() -> anyhow::Result<()> {
                                     pid: Some(p.pid),
                                     process_name: Some(p.name.clone()),
                                     process_path: p.path.clone(),
-                                    assessment: Some(verdict.classification.clone()),
+                                    assessment: Some(verdict.classification.to_string()),
                                     detail: verdict.reasoning.clone(),
-                                    action_taken: Some(verdict.recommendation.clone()),
+                                    action_taken: Some(verdict.recommendation.to_string()),
                                     ai_verdict: Some(
                                         serde_json::to_string(&verdict).unwrap_or_default(),
                                     ),
@@ -358,8 +392,10 @@ async fn main() -> anyhow::Result<()> {
                                 // false positive.
                                 let destructive_ok =
                                     ai_destructive_allowed(verdict.confidence, &ctx.path_verdict);
-                                let wants_destructive = verdict.recommendation == "TERMINATE"
-                                    || verdict.recommendation == "QUARANTINE";
+                                let wants_destructive = matches!(
+                                    verdict.recommendation,
+                                    AiRecommendation::Terminate | AiRecommendation::Quarantine
+                                );
 
                                 if active_defense && wants_destructive && !destructive_ok {
                                     println!(
@@ -379,11 +415,13 @@ async fn main() -> anyhow::Result<()> {
                                             ctx.path_verdict,
                                         ),
                                     );
-                                } else if active_defense && verdict.recommendation == "TERMINATE" {
+                                } else if active_defense
+                                    && verdict.recommendation == AiRecommendation::Terminate
+                                {
                                     print!(
                                         "    [!!!] AI RECOMMENDS TERMINATION. ACTIVATING CYTOTOXIC T CELLS... "
                                     );
-                                    match CytotoxicTCell::induce_apoptosis(p.pid) {
+                                    match CytotoxicTCell::induce_apoptosis(p.pid, p.creation_time) {
                                         Ok(_) => {
                                             println!("TARGET ELIMINATED.");
                                             logger.log_action(
@@ -396,7 +434,7 @@ async fn main() -> anyhow::Result<()> {
                                         Err(e) => println!("FAILED: {}", e),
                                     }
                                 } else if active_defense
-                                    && verdict.recommendation == "QUARANTINE"
+                                    && verdict.recommendation == AiRecommendation::Quarantine
                                     && let Some(ref mut q) = quarantine
                                     && let Some(ref path) = p.path
                                 {
@@ -420,7 +458,10 @@ async fn main() -> anyhow::Result<()> {
                                             // The on-disk file is already moved; killing prevents
                                             // the malware from re-launching itself (nowhere to load from).
                                             print!("KILLING PROCESS... ");
-                                            match CytotoxicTCell::induce_apoptosis(p.pid) {
+                                            match CytotoxicTCell::induce_apoptosis(
+                                                p.pid,
+                                                p.creation_time,
+                                            ) {
                                                 Ok(_) => {
                                                     println!("TARGET ELIMINATED.");
                                                     logger.log_action(
@@ -466,7 +507,7 @@ async fn main() -> anyhow::Result<()> {
                             } else {
                                 print!("    [!!!] ELIMINATING TARGET... ");
                             }
-                            match CytotoxicTCell::induce_apoptosis(p.pid) {
+                            match CytotoxicTCell::induce_apoptosis(p.pid, p.creation_time) {
                                 Ok(_) => {
                                     println!("TARGET ELIMINATED.");
                                     logger.log_action(p.pid, &p.name, "TERMINATE", &info);
@@ -476,7 +517,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                         ResponseAction::Terminate => {
                             print!("    [!] ACTIVATING CYTOTOXIC T CELLS... ");
-                            match CytotoxicTCell::induce_apoptosis(p.pid) {
+                            match CytotoxicTCell::induce_apoptosis(p.pid, p.creation_time) {
                                 Ok(_) => {
                                     println!("TARGET ELIMINATED.");
                                     logger.log_action(p.pid, &p.name, "TERMINATE", &info);

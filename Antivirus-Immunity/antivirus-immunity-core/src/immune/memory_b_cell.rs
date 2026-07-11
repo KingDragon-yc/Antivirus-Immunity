@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use yara_x::{Compiler, Rules, Scanner};
 
-const DB_FILE: &str = "immunity_db.json";
-const ANTIGENS_FILE: &str = "antigens.yar";
+const EMBEDDED_ANTIGENS: &str = include_str!("../../antigens.yar");
 
 // ═══════════════════════════════════════════════════════════════
 // Persistence schema (V2 — multi-hash fuzzy signatures)
@@ -57,11 +57,19 @@ fn default_version() -> u32 {
 
 pub struct MemoryBCell {
     signatures: Vec<FuzzySigRecord>,
+    db_path: PathBuf,
 }
 
 impl MemoryBCell {
-    pub fn new() -> Self {
-        let signatures = Self::load().unwrap_or_else(|_| {
+    pub fn new(db_path: PathBuf) -> Self {
+        let signatures = Self::load(&db_path).unwrap_or_else(|e| {
+            if db_path.exists() {
+                eprintln!(
+                    "[!] Memory B Cell: Failed to load {}: {}. Starting with no trusted signatures.",
+                    db_path.display(),
+                    e
+                );
+            }
             println!("[*] Memory B Cell: No existing memory found. Starting fresh.");
             Vec::new()
         });
@@ -73,11 +81,14 @@ impl MemoryBCell {
             );
         }
 
-        Self { signatures }
+        Self {
+            signatures,
+            db_path,
+        }
     }
 
-    fn load() -> anyhow::Result<Vec<FuzzySigRecord>> {
-        let file = File::open(DB_FILE)?;
+    fn load(db_path: &Path) -> anyhow::Result<Vec<FuzzySigRecord>> {
+        let file = File::open(db_path)?;
         let reader = BufReader::new(file);
         let storage: MemoryBCellStorage = serde_json::from_reader(reader)?;
 
@@ -116,7 +127,7 @@ impl MemoryBCell {
             signatures: self.signatures.clone(),
             trusted_hashes: HashSet::new(),
         };
-        let file = File::create(DB_FILE)?;
+        let file = File::create(&self.db_path)?;
         let writer = std::io::BufWriter::new(file);
         serde_json::to_writer_pretty(writer, &storage)?;
         Ok(())
@@ -236,7 +247,7 @@ pub enum Assessment {
 }
 
 impl ImmuneSystem {
-    pub fn new() -> Self {
+    pub fn new(data_dir: &Path) -> Self {
         let yara_rules = Self::load_antigens().ok();
         if yara_rules.is_some() {
             println!("[+] Immune System: Antigen database (YARA) loaded.");
@@ -244,7 +255,7 @@ impl ImmuneSystem {
             println!("[!] Warning: Failed to load antigen database ('antigens.yar').");
         }
 
-        let memory = MemoryBCell::new();
+        let memory = MemoryBCell::new(data_dir.join("immunity_db.json"));
         println!(
             "[+] Immune System: {} signatures in adaptive memory (SHA256 + Ssdeep + Imphash).",
             memory.signature_count()
@@ -258,9 +269,8 @@ impl ImmuneSystem {
     }
 
     fn load_antigens() -> anyhow::Result<Rules> {
-        let source = std::fs::read_to_string(ANTIGENS_FILE)?;
         let mut compiler = Compiler::new();
-        compiler.add_source(source.as_str())?;
+        compiler.add_source(EMBEDDED_ANTIGENS)?;
         let rules = compiler.build();
         Ok(rules)
     }

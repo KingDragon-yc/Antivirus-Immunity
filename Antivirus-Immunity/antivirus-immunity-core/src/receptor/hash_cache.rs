@@ -15,12 +15,13 @@ use std::io::Read;
 use std::num::NonZeroUsize;
 use std::time::SystemTime;
 
-/// Cache key: (file_path, file_size, last_modified_epoch_secs)
+/// Cache key bound to high-resolution file metadata.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct CacheKey {
     path: String,
     size: u64,
-    modified: u64,
+    modified_nanos: u128,
+    created_nanos: u128,
 }
 
 pub struct HashCache {
@@ -41,9 +42,11 @@ impl HashCache {
     }
 
     /// Get or compute the SHA256 hash for a file.
-    /// Uses (path, size, mtime) as cache key to detect file changes.
+    /// Opens the file before deriving the key and verifies metadata again after
+    /// hashing so a replacement cannot pair an old key with new contents.
     pub fn get_or_compute(&mut self, path: &str) -> Result<String> {
-        let key = self.make_key(path)?;
+        let mut file = File::open(path)?;
+        let key = Self::make_key(path, &file.metadata()?);
 
         // Check cache
         if let Some(hash) = self.cache.get(&key) {
@@ -53,32 +56,29 @@ impl HashCache {
 
         // Cache miss — compute hash
         self.misses += 1;
-        let hash = Self::compute_sha256(path)?;
+        let hash = Self::compute_sha256(&mut file)?;
+        let key_after = Self::make_key(path, &file.metadata()?);
+        if key != key_after {
+            return Err(anyhow::anyhow!(
+                "File changed while hashing; refusing unstable digest: {}",
+                path
+            ));
+        }
         self.cache.put(key, hash.clone());
         Ok(hash)
     }
 
-    /// Build cache key from file metadata
-    fn make_key(&self, path: &str) -> Result<CacheKey> {
-        let metadata = fs::metadata(path)?;
-        let size = metadata.len();
-        let modified = metadata
-            .modified()
-            .unwrap_or(SystemTime::UNIX_EPOCH)
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        Ok(CacheKey {
+    fn make_key(path: &str, metadata: &fs::Metadata) -> CacheKey {
+        CacheKey {
             path: path.to_lowercase(), // Normalize case for Windows
-            size,
-            modified,
-        })
+            size: metadata.len(),
+            modified_nanos: timestamp_nanos(metadata.modified()),
+            created_nanos: timestamp_nanos(metadata.created()),
+        }
     }
 
     /// Compute SHA256 of a file
-    fn compute_sha256(path: &str) -> Result<String> {
-        let mut file = File::open(path)?;
+    fn compute_sha256(file: &mut File) -> Result<String> {
         let mut hasher = Sha256::new();
         let mut buffer = [0u8; 8192]; // 8KB buffer
 
@@ -112,5 +112,39 @@ impl HashCache {
             self.misses,
             self.hit_ratio() * 100.0
         )
+    }
+}
+
+fn timestamp_nanos(value: std::io::Result<SystemTime>) -> u128 {
+    value
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn same_size_immediate_rewrite_invalidates_cached_hash() {
+        let path = std::env::temp_dir().join(format!("immunity-hash-{}.bin", uuid::Uuid::new_v4()));
+        fs::write(&path, b"AAAA").expect("write first content");
+        let mut cache = HashCache::new(4);
+        let first = cache
+            .get_or_compute(path.to_str().expect("utf8 path"))
+            .expect("first hash");
+
+        let mut file = File::create(&path).expect("replace content");
+        file.write_all(b"BBBB").expect("write replacement");
+        file.sync_all().expect("flush replacement");
+        let second = cache
+            .get_or_compute(path.to_str().expect("utf8 path"))
+            .expect("second hash");
+
+        assert_ne!(first, second);
+        let _ = fs::remove_file(path);
     }
 }

@@ -251,6 +251,8 @@ cargo run -p antivirus-immunity-core -- --mode active --policy quarantine --ai t
 cargo run -p antivirus-immunity-core -- --mode quarantine-list  # 查看隔离区
 ```
 
+Core 的规则已编译进二进制，不再依赖启动目录下的 `antigens.yar`。免疫库、日志和隔离区默认写入 `<可执行文件目录>/data`；生产部署建议用 `--data-dir <绝对路径>` 或环境变量 `ANTIVIRUS_IMMUNITY_DATA_DIR` 指定受保护的持久化目录。旧版本位于工作目录的 `immunity_db.json` / `logs` / `quarantine` 不会被自动信任迁移，请审核后手动迁移。
+
 ---
 
 ## 生物学类比

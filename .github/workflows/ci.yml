@@ -156,6 +156,36 @@ jobs:
           path: Antivirus-Immunity\target\release\antivirus-immunity-core.exe
           if-no-files-found: warn
 
+  msrv:
+    name: MSRV 1.91 (Windows core)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenSSL
+        shell: powershell
+        run: |
+          choco install openssl --no-progress -y
+          $candidates = @(
+            "C:\Program Files\OpenSSL-Win64",
+            "C:\Program Files\OpenSSL",
+            "C:\OpenSSL-Win64"
+          )
+          $root = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $root) {
+            Write-Error "OpenSSL install root not found"
+            exit 1
+          }
+          "OPENSSL_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: clippy
+
+      - name: Check core on declared MSRV
+        working-directory: Antivirus-Immunity
+        run: cargo check --locked --package antivirus-immunity-core
+
   audit:
     name: Security Audit
     runs-on: ubuntu-latest

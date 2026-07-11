@@ -16,7 +16,7 @@ fn main() {
     let signature = format!("{}{}", part1, part2);
 
     // Also include the EICAR string just in case, but keep it constructed to avoid static detection of this source file
-    let eicar = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+    let _eicar = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
     println!("Signature loaded: {}", signature);
     println!("Running... (Press Ctrl+C to stop)");
