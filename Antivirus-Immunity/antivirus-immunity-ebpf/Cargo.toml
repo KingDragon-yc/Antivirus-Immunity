@@ -1,6 +1,6 @@
 [package]
 name = "antivirus-immunity-ebpf"
-version = "0.5.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.91"
 description = "eBPF-based cloud-native Linux security engine for Antivirus-Immunity"
@@ -21,9 +21,13 @@ chrono = { version = "0.4", features = ["serde"] }
 nix = { version = "0.31", features = ["process", "signal", "user", "fs", "socket"] }
 libc = "0.2"
 uuid = { version = "1.23", features = ["v4"] }
+sha2 = "0.11"
+hex = "0.4"
+fuzzyhash = "=0.2.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = "0.26.2"
+libbpf-sys = "1.7.0"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
 libbpf-cargo = "0.26.2"

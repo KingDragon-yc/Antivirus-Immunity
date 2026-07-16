@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "threshold": 80,
+  "max_file_bytes": 67108864,
+  "entries": []
+}

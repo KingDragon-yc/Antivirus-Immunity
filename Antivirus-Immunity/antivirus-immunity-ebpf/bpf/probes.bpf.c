@@ -8,6 +8,9 @@
 #define EVENT_PROCESS_EXIT 2
 #define TASK_COMM_LEN 16
 #define PATH_LEN 256
+#define CORE_STAT_EVENTS_EMITTED 0
+#define CORE_STAT_RINGBUF_DROPPED 1
+#define CORE_STAT_MAX 2
 
 /*
  * Stable kernel/userspace wire ABI. Keep fields fixed-width and decode them
@@ -36,6 +39,20 @@ struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 256 * 1024);
 } events SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, CORE_STAT_MAX);
+    __type(key, __u32);
+    __type(value, __u64);
+} core_stats SEC(".maps");
+
+static __always_inline void increment_core_stat(__u32 index)
+{
+    __u64 *value = bpf_map_lookup_elem(&core_stats, &index);
+    if (value)
+        *value += 1;
+}
 
 static __always_inline void fill_header(struct event *event, __u32 event_type)
 {
@@ -69,17 +86,23 @@ static __always_inline void fill_header(struct event *event, __u32 event_type)
     }
 }
 
-SEC("tracepoint/syscalls/sys_enter_execve")
-int handle_execve(struct trace_event_raw_sys_enter *ctx)
+SEC("tracepoint/sched/sched_process_exec")
+int handle_process_exec(struct trace_event_raw_sched_process_exec *ctx)
 {
     struct event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-    if (!event)
+    if (!event) {
+        increment_core_stat(CORE_STAT_RINGBUF_DROPPED);
         return 0;
+    }
 
     fill_header(event, EVENT_PROCESS_EXEC);
-    bpf_probe_read_user_str(event->path, sizeof(event->path),
-                            (const char *)ctx->args[0]);
+    /* sched_process_exec fires only after a successful exec. The data_loc
+     * low 16 bits are the filename offset inside the tracepoint record. */
+    __u32 filename_offset = ctx->__data_loc_filename & 0xffff;
+    bpf_probe_read_kernel_str(event->path, sizeof(event->path),
+                              (const char *)ctx + filename_offset);
     bpf_ringbuf_submit(event, 0);
+    increment_core_stat(CORE_STAT_EVENTS_EMITTED);
     return 0;
 }
 
@@ -93,11 +116,14 @@ int handle_process_exit(void *ctx)
         return 0;
 
     struct event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-    if (!event)
+    if (!event) {
+        increment_core_stat(CORE_STAT_RINGBUF_DROPPED);
         return 0;
+    }
 
     fill_header(event, EVENT_PROCESS_EXIT);
     bpf_ringbuf_submit(event, 0);
+    increment_core_stat(CORE_STAT_EVENTS_EMITTED);
     return 0;
 }
 

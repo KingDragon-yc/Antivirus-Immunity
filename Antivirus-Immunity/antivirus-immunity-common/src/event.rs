@@ -27,7 +27,7 @@ pub struct ProcessInfo {
 /// eBPF 原始事件类型 — 内核探针产生
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ProbeEventType {
-    /// 进程启动 (tracepoint/syscalls/sys_enter_execve)
+    /// 进程成功启动 (`sched_process_exec` tracepoint)
     ProcessExec,
     /// 进程退出
     ProcessExit,
@@ -112,6 +112,8 @@ pub enum SecurityEventType {
     ThreatBlocked,
     NetworkBlocked,
     FileAccessBlocked,
+    NetworkPolicyMatch,
+    FilePolicyMatch,
     PrivilegeEscalation,
     ContainerEscape,
     DangerSignal,

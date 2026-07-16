@@ -28,7 +28,7 @@ git checkout v0.4.1        # 或 main 分支最新提交
 前置：Rust 1.91+（`rustup default stable`）、VS Build Tools（C++ + Windows SDK）。
 
 ```powershell
-cargo build --release -p antivirus-immunity-common -p antivirus-immunity-core
+cargo build --release --manifest-path antivirus-immunity-core/Cargo.toml
 ```
 
 - ❑ 退出码 0，无 error
@@ -58,7 +58,7 @@ cargo build --release -p antivirus-immunity-common -p antivirus-immunity-ebpf
 ### 2.1 Windows 单元测试（core）
 
 ```powershell
-cargo test -p antivirus-immunity-core
+cargo test --manifest-path antivirus-immunity-core/Cargo.toml
 ```
 
 - ❑ 至少 **25 个测试通过**（7 path_validator + 13 fuzzy_hash + 5 其它）
@@ -80,7 +80,7 @@ cargo test -p antivirus-immunity-ebpf     # 期望 5 passed（含 procfs ppid �
 cargo fmt --all -- --check                 # 格式
 cargo clippy -p antivirus-immunity-common -- -D warnings
 cargo clippy -p antivirus-immunity-ebpf -- -A dead_code -D warnings
-cargo clippy -p antivirus-immunity-core -- -D warnings
+cargo clippy --manifest-path antivirus-immunity-core/Cargo.toml -- -D warnings
 ```
 
 - ❑ fmt 无 diff
@@ -173,7 +173,7 @@ cargo run --release -- --mode active --policy kill --ai true --ai-model qwen2.5:
 
 ## 6. 文档与诚实度
 
-- ❑ README 顶部实现状态表如实标注 CO-RE exec/exit + Ring Buffer 已实现，并把网络/LSM 阻断保留为规划项
+- ❑ README 顶部逐项标注 CO-RE、XDP、TC、LSM 的真实实现状态与内核前置条件
 - ❑ README 徽章 `Rust-2024`，与 Cargo.toml 的 `edition = "2024"` 一致
 - ❑ USER_MANUAL 版本号 `v0.4.1`，描述了模糊哈希 / AI 安全门控 / 隔离区机制
 - ❑ 免责声明明确"实验性/教育性项目，不能替代商业杀毒"
@@ -184,7 +184,24 @@ cargo run --release -- --mode active --policy kill --ai true --ai-model qwen2.5:
 
 | 项 | 现状 | 说明 |
 |----|------|------|
-| eBPF 探针 | exec/exit 已接入 | libbpf-rs 加载 CO-RE skeleton 并消费 Ring Buffer；网络/LSM/提权仍未接入 |
+| eBPF 探针 | exec/exit + 网络/文件护栏已接入 | 双 CO-RE skeleton；XDP/TCX/TC 与 BPF LSM 逐项 attach/降级；提权 hook 仍未接入 |
+
+## 9. Linux v0.7 Release gate
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --package antivirus-immunity-common -- -D warnings
+cargo clippy --locked --package antivirus-immunity-ebpf -- -A dead_code -D warnings
+cargo test --locked --package antivirus-immunity-common
+cargo test --locked --package antivirus-immunity-ebpf
+cargo build --locked --release --package antivirus-immunity-ebpf
+sudo bash scripts/verify-kernel-guards.sh ./target/release/immunity-ebpf
+```
+
+- ❑ BPF LSM 测试仅在 `/sys/kernel/security/lsm` 包含 `bpf` 的测试节点运行；退出码 77 表示内核前置条件缺失
+- ❑ Linux 6.6+ 启动日志显示 XDP 与 TC 接口，强制终止进程后无 legacy TC filter 残留
+- ❑ `/metrics` 含 attach、fallback、kernel/user queue drop 与阻断 counter，且 `/healthz` 返回 200
+- ❑ DaemonSet 默认 `monitor`、空网络/威胁黑名单、32 MiB request，转 `enforce` 前完成逐节点 canary
 | core 跨平台 | 仅 Windows | core 用 Win32 API（ToolHelp32/TerminateProcess），Linux 上不编译（设计如此） |
 | 隔离区 CLI | 无 release/purge 子命令 | API 有 `release`/`purge` 方法，CLI 暂未暴露，需手动恢复 |
 | 进程监控盲区 | Windows core 为轮询型 | core 可能漏检短命进程；Linux eBPF/Netlink 均为事件驱动 |

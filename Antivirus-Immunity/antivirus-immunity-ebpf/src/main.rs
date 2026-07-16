@@ -8,7 +8,7 @@
 //! 架构：
 //! ┌──────────────────────────────────────────────┐
 //! │  Kernel Space (eBPF probes, C/restricted)     │
-//! │       execve + process_exit tracepoints      │
+//! │       process_exec + process_exit tracepoints│
 //! │                     │                        │
 //! │              BPF Ring Buffer                  │
 //! ├──────────────────────┼────────────────────────┤
@@ -35,6 +35,8 @@ mod container;
 #[cfg(target_os = "linux")]
 mod ebpf_runtime;
 mod filesystem;
+mod kernel_policy;
+mod metrics;
 #[cfg(target_os = "linux")]
 mod netlink_connector;
 mod network;
@@ -46,6 +48,7 @@ mod probe;
 mod process_tree;
 mod procfs;
 mod resource_aware;
+mod threat_intel;
 
 use antivirus_immunity_common::{
     ai_cortex::{AiCortex, AiCortexConfig, AiRecommendation},
@@ -54,6 +57,8 @@ use antivirus_immunity_common::{
 };
 use chrono::Utc;
 use clap::Parser;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Read a process's start time (field 22 of `/proc/<pid>/stat`, clock ticks
 /// since boot). Used as a PID-reuse fingerprint: if it changes, the PID now
@@ -141,11 +146,34 @@ struct Args {
     /// Event output format: 'text', 'json'
     #[arg(long, default_value = "text")]
     output: String,
+
+    /// Versioned JSON policy compiled into eBPF maps
+    #[arg(long)]
+    kernel_policy: Option<PathBuf>,
+
+    /// Interfaces for XDP/TC; repeat, comma-separate, or use 'auto'
+    #[arg(long = "interface", value_delimiter = ',')]
+    interfaces: Vec<String>,
+
+    /// Prometheus listen address, or 'off'
+    #[arg(long, default_value = "127.0.0.1:9090")]
+    metrics_listen: String,
+
+    /// Local version-1 SHA-256/CTPH threat-intelligence database
+    #[arg(long)]
+    threat_intel: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    if !matches!(args.mode.as_str(), "monitor" | "enforce" | "learn" | "lite") {
+        anyhow::bail!(
+            "unsupported mode {:?}; expected monitor, enforce, learn, or lite",
+            args.mode
+        );
+    }
 
     // ==================== RESOURCE AWARENESS ====================
     let hw_profile = resource_aware::detect_hardware();
@@ -153,7 +181,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!();
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║        Antivirus-Immunity eBPF Engine v0.5.0               ║");
+    println!("║        Antivirus-Immunity eBPF Engine v0.7.0               ║");
     println!("║        Cloud-Native Linux Security · eBPF + AI Cortex      ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
@@ -173,6 +201,19 @@ async fn main() -> anyhow::Result<()> {
     println!("[*] Profile: {}", args.profile);
     println!();
 
+    // ==================== METRICS ====================
+    let metrics = Arc::new(metrics::Metrics::default());
+    if args.metrics_listen != "off" {
+        let listen = args.metrics_listen.clone();
+        let exporter = Arc::clone(&metrics);
+        tokio::spawn(async move {
+            if let Err(error) = exporter.serve(listen).await {
+                eprintln!("[!] Prometheus exporter stopped: {error:#}");
+            }
+        });
+        println!("[*] Prometheus: http://{}/metrics", args.metrics_listen);
+    }
+
     // ==================== LOGGER ====================
     let logger = Logger::new().unwrap_or_else(|e| {
         eprintln!(
@@ -186,8 +227,25 @@ async fn main() -> anyhow::Result<()> {
     let protected_paths: Vec<String> = args
         .protected_paths
         .split(',')
-        .map(|s| s.trim().to_string())
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
         .collect();
+
+    let kernel_policy = kernel_policy::KernelPolicy::load(
+        args.kernel_policy.as_deref(),
+        args.mode == "enforce",
+        &args.interfaces,
+        &protected_paths,
+    )?;
+    println!(
+        "[*] Kernel policy generation {}: {} networks, {} ports, {} paths, fail_closed={}",
+        kernel_policy.generation,
+        kernel_policy.networks.len(),
+        kernel_policy.blocked_ports.len(),
+        kernel_policy.protected_paths.len(),
+        kernel_policy.fail_closed,
+    );
 
     let policy = policy::PolicyEngine::new(
         &args.profile,
@@ -195,6 +253,18 @@ async fn main() -> anyhow::Result<()> {
         protected_paths,
         args.whitelist.as_deref(),
     );
+
+    let mut threat_intel = match args.threat_intel.as_deref() {
+        Some(path) => {
+            let database = threat_intel::ThreatIntel::load(path)?;
+            println!(
+                "[*] Threat intelligence: {} bounded SHA-256/CTPH entries",
+                database.entry_count()
+            );
+            Some(database)
+        }
+        None => None,
+    };
 
     println!(
         "[*] Policy Engine: {} rules loaded, {} protected paths",
@@ -249,11 +319,22 @@ async fn main() -> anyhow::Result<()> {
     println!();
     println!("[*] Initializing CO-RE eBPF event source...");
 
-    let mut probe_manager = probe::ProbeManager::new(lite_mode)?;
-    println!("[*] Active eBPF probe set:");
-    println!("    - Process: tracepoint/syscalls/sys_enter_execve");
-    println!("    - Process: tracepoint/sched/sched_process_exit");
-    println!("    - Channel: BPF_MAP_TYPE_RINGBUF (256 KiB)");
+    let mut probe_manager =
+        probe::ProbeManager::new(lite_mode, kernel_policy, Arc::clone(&metrics))?;
+    println!("[*] Active kernel capability set:");
+    #[cfg(target_os = "linux")]
+    if let Some(status) = probe_manager.ebpf_status() {
+        println!("    - CO-RE exec/exit: {}", status.core_attached);
+        println!("    - BPF LSM file guard: {}", status.lsm_attached);
+        println!("    - XDP ingress: {:?}", status.xdp_interfaces);
+        println!("    - TC egress: {:?}", status.tc_interfaces);
+        for degradation in &status.degradations {
+            println!("    - Degraded: {degradation}");
+        }
+        println!("    - Channels: two bounded 256 KiB Ring Buffers");
+    } else {
+        println!("    - eBPF unavailable; process source is in fallback mode");
+    }
     println!();
 
     // ==================== PROCESS TREE ====================
@@ -288,10 +369,12 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     let stopped_pids: std::sync::Arc<std::sync::Mutex<Vec<u32>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     #[cfg(target_os = "linux")]
     {
         let stopped_pids_for_signal = stopped_pids.clone();
+        let shutdown_for_signal = Arc::clone(&shutdown);
         tokio::spawn(async move {
             use tokio::signal::unix::{SignalKind, signal};
             let mut sigint = match signal(SignalKind::interrupt()) {
@@ -320,17 +403,30 @@ async fn main() -> anyhow::Result<()> {
                     let _ = kill(Pid::from_raw(*pid as i32), Signal::SIGCONT);
                 }
             }
-            std::process::exit(130);
+            // Let the main loop unwind so EbpfRuntime can detach legacy TC
+            // filters. process::exit would skip Drop and could leave a live
+            // network policy behind after the agent stopped.
+            shutdown_for_signal.store(true, std::sync::atomic::Ordering::Release);
         });
     }
 
-    loop {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let shutdown_for_signal = Arc::clone(&shutdown);
+        tokio::spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            shutdown_for_signal.store(true, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
         let events = probe_manager.poll_events()?;
 
         // Collect AI-deferred tasks for this cycle
         let mut deferred_tasks = Vec::new();
 
         for event in events {
+            metrics.event_processed();
             // Enrich with container context
             let container_id = container_ctx.resolve_container(event.pid);
 
@@ -338,7 +434,39 @@ async fn main() -> anyhow::Result<()> {
             let parent_chain = proc_tree.get_ancestry(event.pid);
 
             // ── Rule-based policy evaluation (fast path) ──
-            let verdict = policy.evaluate(&event, container_id.as_deref(), &parent_chain);
+            let mut verdict = policy.evaluate(&event, container_id.as_deref(), &parent_chain);
+            let mut threat_detected = false;
+
+            #[cfg(target_os = "linux")]
+            if matches!(&event.event_type, probe::ProbeType::Execve)
+                && let Some(database) = threat_intel.as_mut()
+            {
+                let executable = PathBuf::from(format!("/proc/{}/exe", event.pid));
+                match database.scan(&executable) {
+                    Ok(Some(matched)) => {
+                        threat_detected = true;
+                        metrics.threat_match();
+                        verdict.action = if args.mode == "enforce" {
+                            antivirus_immunity_common::event::ResponseAction::Terminate
+                        } else {
+                            antivirus_immunity_common::event::ResponseAction::Monitor
+                        };
+                        verdict.severity = Severity::Critical;
+                        verdict.reason = format!(
+                            "Threat intelligence matched family {} via {:?}",
+                            matched.family, matched.method
+                        );
+                        println!("    [!] {}", verdict.reason);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        // Short-lived processes commonly disappear before /proc can be opened.
+                        if executable.exists() {
+                            eprintln!("    [!] Threat-intel scan failed: {error:#}");
+                        }
+                    }
+                }
+            }
 
             let container_label = container_id
                 .as_deref()
@@ -357,9 +485,29 @@ async fn main() -> anyhow::Result<()> {
             );
 
             // Log the detection
+            let security_event_type = if threat_detected {
+                SecurityEventType::ThreatDetected
+            } else {
+                match &event.event_type {
+                    probe::ProbeType::NetworkBlocked { enforced: true, .. } => {
+                        SecurityEventType::NetworkBlocked
+                    }
+                    probe::ProbeType::NetworkBlocked {
+                        enforced: false, ..
+                    } => SecurityEventType::NetworkPolicyMatch,
+                    probe::ProbeType::FileBlocked { enforced: true, .. } => {
+                        SecurityEventType::FileAccessBlocked
+                    }
+                    probe::ProbeType::FileBlocked {
+                        enforced: false, ..
+                    } => SecurityEventType::FilePolicyMatch,
+                    probe::ProbeType::Exit => SecurityEventType::ProcessTerminated,
+                    _ => SecurityEventType::ProcessExec,
+                }
+            };
             logger.log(&SecurityEvent {
                 timestamp: Utc::now(),
-                event_type: SecurityEventType::ProcessExec,
+                event_type: security_event_type,
                 severity: verdict.severity.clone(),
                 pid: Some(event.pid),
                 process_name: Some(event.comm.clone()),
@@ -387,7 +535,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 antivirus_immunity_common::event::ResponseAction::BlockAccess => {
-                    println!("    [!] ACCESS BLOCKED (eBPF LSM returned -EPERM)");
+                    println!("    [!] OPERATION BLOCKED BY KERNEL GUARD");
                 }
                 antivirus_immunity_common::event::ResponseAction::Monitor => {
                     // ── Async Deferred Blocking ──
@@ -397,7 +545,12 @@ async fn main() -> anyhow::Result<()> {
                     // (an enum) while this `if` keys on a runtime bool — they are
                     // not collapsible without obscuring intent, so we allow it.
                     #[allow(clippy::collapsible_match)]
-                    if ai_cortex.is_available() && event.pid > 1 {
+                    if args.mode == "enforce"
+                        && matches!(&verdict.severity, Severity::High | Severity::Critical)
+                        && matches!(&event.event_type, probe::ProbeType::Execve)
+                        && ai_cortex.is_available()
+                        && event.pid > 1
+                    {
                         println!(
                             "    [🧠] Deferred blocking PID {}: SIGSTOP → AI analysis...",
                             event.pid
@@ -622,5 +775,33 @@ async fn main() -> anyhow::Result<()> {
         // On /proc fallback, add a minimal yield to prevent CPU spinning.
         #[cfg(not(target_os = "linux"))]
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // The probe API is synchronous; yield so the Prometheus listener and
+        // deferred-analysis tasks still receive runtime time on quiet hosts.
+        tokio::task::yield_now().await;
     }
+
+    #[cfg(target_os = "linux")]
+    if let Ok(pids) = stopped_pids.lock() {
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+        for pid in pids.iter() {
+            let _ = kill(Pid::from_raw(*pid as i32), Signal::SIGCONT);
+        }
+    }
+
+    logger.log(&SecurityEvent {
+        timestamp: Utc::now(),
+        event_type: SecurityEventType::SystemStop,
+        severity: Severity::Info,
+        pid: None,
+        process_name: None,
+        process_path: None,
+        container_id: None,
+        detail: "eBPF engine stopped gracefully".to_owned(),
+        action_taken: None,
+        ai_verdict: None,
+        danger_level: Some(format!("{:?}", DangerLevel::Normal)),
+    });
+    drop(probe_manager);
+    Ok(())
 }
