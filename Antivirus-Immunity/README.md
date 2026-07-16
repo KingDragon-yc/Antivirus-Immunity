@@ -14,7 +14,7 @@ Antivirus-Immunity 是基于 **人工免疫系统 (AIS)** 理论的安全防护�
 
 - **自我/非我识别** — 建立系统"正常态"基线，识别偏离行为
 - **自适应模糊哈希免疫记忆** — CTPH (Ssdeep) + Imphash 多维度变种识别，告别 SHA256 精确匹配的脆弱性
-- **异步推迟阻断** — Linux 端 SIGSTOP 挂起可疑进程，AI 500ms 内出 Verdict 后决定放行或击杀；避免"先运行、后研判"
+- **异步 AI 处置** — Linux `enforce` 模式仅对 High/Critical 的成功 EXEC 做 best-effort `SIGSTOP`，AI 500ms 内决定恢复或击杀；它缩短暴露窗口，但不提供执行前阻断保证
 - **危险信号理论** — 监测系统压力信号（CPU 飙升、进程洪水等），动态调整免疫灵敏度
 - **AI 辅助研判 (Cortex, 3B 模型, 仅作规则引擎 tie-breaker)** — 对模糊案例调用本地 LLM；destructive action 受 0.8 置信度门控 + 可信路径保护约束，对 prompt injection 有基础防护但非绝对
 - **自适应性** — 对未知攻击手段做出反应，而非依赖已知签名
@@ -39,9 +39,11 @@ Antivirus-Immunity 是基于 **人工免疫系统 (AIS)** 理论的安全防护�
 | AI Cortex (Ollama) | ✅ 可用 | 可选；不可用时自动降级为规则引擎 |
 | Linux 进程事件源 (Netlink Connector) | ✅ 可用 | `NETLINK_CONNECTOR` 内核推送，订阅 FORK/EXEC/EXIT |
 | Linux `/proc` 轮询兜底 | ✅ 可用 | 无 Netlink 时的最终降级路径 |
-| 异步推迟阻断 (SIGSTOP→AI→SIGKILL/SIGCONT) | ✅ 可用 | 已加固 PID 复用竞态防护 |
+| 异步 AI 处置 (高危 EXEC→SIGSTOP→AI→SIGKILL/SIGCONT) | ✅ 可用 | 仅 `enforce`；已加固 PID 复用竞态防护 |
 | **eBPF CO-RE 进程探针 / Ring Buffer 消费** | ✅ 可用 | libbpf-rs 0.26 加载并附加 exec/exit tracepoint；固定 ABI Ring Buffer 传输；失败时降级 Netlink/`proc` |
-| XDP/TC 网络阻断 · LSM 文件护栏内核实现 | 🚧 规划中 (v0.6) | 尚未实现；当前 eBPF 仅覆盖进程执行与退出观测 |
+| XDP/TCX/TC 网络阻断 | ✅ v0.6 | IPv4/IPv6 LPM 黑名单与端口 map；XDP 入站、TCX/TC 出站，逐接口降级 |
+| BPF LSM 文件护栏 | ✅ v0.6 | `file_open` 内核阻断、路径最长前缀规则；拒绝可伪装的 comm 放行；需启动 LSM 包含 `bpf` |
+| K8s / Prometheus / 威胁情报 | ✅ v0.7 | DaemonSet + Sidecar patch、低基数 metrics、带缓存和大小上限的 SHA-256/CTPH 黑名单 |
 
 ---
 
@@ -54,9 +56,9 @@ Antivirus-Immunity 是基于 **人工免疫系统 (AIS)** 理论的安全防护�
                     │                                     │
   ┌─────────────────┴─────────┐   ┌──────────────────────┴──────────┐
   │  antivirus-immunity-core  │   │  antivirus-immunity-ebpf        │
-  │  (Windows · Legacy v0.3)  │   │  (Linux · v0.5 · eBPF 在用)    │
+  │  (Windows · Legacy v0.4)  │   │  (Linux · v0.7 · eBPF 在用)    │
   │                           │   │                                 │
-  │  ToolHelp32 进程扫描      │   │  eBPF exec/exit (CO-RE)         │
+  │  ToolHelp32 进程扫描      │   │  exec/exit + XDP/TCX/TC + LSM  │
   │  YARA 规则引擎            │   │  Ring Buffer + Netlink fallback │
   │  Windows API              │   │  Async Deferred Blocking        │
   │  Fuzzy Hash (Ssdeep+Imph) │   │  Docker/K8s 容器感知            │
@@ -107,7 +109,7 @@ poll_events() 优先级:
 ### 异步推迟阻断 (Async Deferred Blocking)
 
 ```
-eBPF/Netlink 检测 EXEC → SIGSTOP 进程 → AI Cortex (500ms timeout)
+eBPF/Netlink 检测成功 EXEC → High/Critical 规则命中 → best-effort SIGSTOP → AI Cortex (500ms timeout)
     ├─ TERMINATE/MALICIOUS → SIGKILL (先校验 /proc starttime, 防 PID 复用误杀)
     ├─ SAFE/ALLOW          → SIGCONT (恢复)
     └─ 超时                → SIGCONT + 日志 (默认放行)
@@ -132,15 +134,19 @@ Antivirus-Immunity/
 │       ├── ai_cortex.rs               # Ollama LLM 接口
 │       └── hash_cache.rs             # LRU SHA256 缓存
 │
-├── antivirus-immunity-ebpf/            # Linux eBPF 引擎 (v0.5.0)
+├── antivirus-immunity-ebpf/            # Linux eBPF 引擎 (v0.7.0)
 │   ├── Cargo.toml
 │   ├── build.rs                        # libbpf-cargo CO-RE skeleton 构建
 │   ├── bpf/
 │   │   ├── probes.bpf.c               # CO-RE exec/exit 内核探针
+│   │   ├── guard.bpf.c                # XDP/TCX/TC + BPF LSM 内核护栏
 │   │   └── vmlinux.h                  # 最小 CO-RE 类型声明
 │   └── src/
 │       ├── main.rs                     # CLI + 事件循环 + 异步推迟阻断
-│       ├── ebpf_runtime.rs             # libbpf-rs 加载 + Ring Buffer 消费
+│       ├── ebpf_runtime.rs             # 双 BPF 对象、策略 map、Ring Buffer
+│       ├── kernel_policy.rs            # 有界、版本化内核策略
+│       ├── metrics.rs                  # Prometheus exporter
+│       ├── threat_intel.rs             # SHA-256 + CTPH 黑名单
 │       ├── probe.rs                    # 探针管理 (eBPF / Netlink / /proc)
 │       ├── netlink_connector.rs       # NETLINK_CONNECTOR 零轮询进程监听
 │       ├── container.rs               # Docker/K8s 容器上下文
@@ -174,16 +180,18 @@ Antivirus-Immunity/
 
 ## 内核探针挂载点 (Linux)
 
-> v0.5 已真实加载进程执行/退出探针并消费 Ring Buffer。网络、文件、提权和阻断探针仍属于后续里程碑，不能视为已实现。
+> v0.7 将核心观测对象与可选护栏对象分开加载。单项 attach 失败只降级该项；`fail_closed=true` 可要求护栏不完整时拒绝启动。
 
 | 探针 | 挂载点 | 功能 | Lite模式 |
 |------|--------|------|----------|
-| 进程执行 | `tracepoint/syscalls/sys_enter_execve` | 捕获所有新进程 | ✅ |
+| 进程执行 | `tracepoint/sched/sched_process_exec` | 仅捕获成功 EXEC，task comm 已更新 | ✅ |
 | 进程退出 | `tracepoint/sched/sched_process_exit` | 捕获进程退出 | ✅ |
-| TCP/UDP 外联 | `kprobe` / `fentry` | 尚未实现 | ❌ |
+| 入站网络阻断 | XDP | CIDR/端口 map，命中时 `XDP_DROP` | ✅ |
+| 出站网络阻断 | TCX / TC | 6.6+ 优先 TCX link；legacy TC 显式启用 | ✅ |
 | 提权检测 | `kprobe/commit_creds` | 尚未实现 | ❌ |
-| 文件访问/创建 | BPF LSM | 尚未实现 | ❌ |
-| 网络阻断 | `XDP / TC` | 尚未实现 | ❌ |
+| 文件打开/写入 | BPF LSM `file_open` | 路径规则，enforce 时 `-EPERM` | ✅* |
+
+`*` BPF LSM 需要 `CONFIG_BPF_LSM=y`，且 `/sys/kernel/security/lsm` 包含 `bpf`。
 
 ---
 
@@ -215,11 +223,17 @@ ollama pull qwen2.5:3b
 ### 编译与运行
 
 ```bash
-# 编译整个 workspace
+# 编译 Linux release workspace（Common + eBPF）
 cargo build --release
 
 # 运行 eBPF 引擎 (需要 root 权限)
 sudo ./target/release/immunity-ebpf --profile server
+
+# 内核护栏 + Prometheus + 威胁情报（先以 monitor 验证）
+sudo ./target/release/immunity-ebpf --mode monitor --interface eth0 \
+  --kernel-policy antivirus-immunity-ebpf/config/kernel-policy.example.json \
+  --threat-intel antivirus-immunity-ebpf/config/threat-intel.example.json \
+  --metrics-listen 127.0.0.1:9090
 
 # AI Agent 沙盒模式
 sudo ./target/release/immunity-ebpf --profile ai-agent --ai true --ai-model qwen2.5:3b
@@ -242,15 +256,19 @@ OPTIONS:
       --protected-paths <P>   受保护路径 (逗号分隔)
       --max-memory-mb <MB>    内存上限 [default: 100]
       --output <FORMAT>       输出格式: text, json [default: text]
+      --kernel-policy <PATH>  v1 JSON 内核策略
+      --interface <IFACE>     XDP/TC 接口；可重复、逗号分隔或使用 auto
+      --metrics-listen <ADDR> Prometheus 地址，off 可关闭 [default: 127.0.0.1:9090]
+      --threat-intel <PATH>   v1 SHA-256/CTPH 黑名单
 ```
 
 ### Windows 引擎
 
 ```bash
-cargo run -p antivirus-immunity-core -- --mode learn    # 学习系统正常态
-cargo run -p antivirus-immunity-core -- --mode monitor  # 被动监控
-cargo run -p antivirus-immunity-core -- --mode active --policy quarantine --ai true  # 主动防御
-cargo run -p antivirus-immunity-core -- --mode quarantine-list  # 查看隔离区
+cargo run --manifest-path antivirus-immunity-core/Cargo.toml -- --mode learn    # 学习系统正常态
+cargo run --manifest-path antivirus-immunity-core/Cargo.toml -- --mode monitor  # 被动监控
+cargo run --manifest-path antivirus-immunity-core/Cargo.toml -- --mode active --policy quarantine --ai true  # 主动防御
+cargo run --manifest-path antivirus-immunity-core/Cargo.toml -- --mode quarantine-list  # 查看隔离区
 ```
 
 Core 的规则已编译进二进制，不再依赖启动目录下的 `antigens.yar`。免疫库、日志和隔离区默认写入 `<可执行文件目录>/data`；生产部署建议用 `--data-dir <绝对路径>` 或环境变量 `ANTIVIRUS_IMMUNITY_DATA_DIR` 指定受保护的持久化目录。旧版本位于工作目录的 `immunity_db.json` / `logs` / `quarantine` 不会被自动信任迁移，请审核后手动迁移。
@@ -282,8 +300,8 @@ Core 的规则已编译进二进制，不再依赖启动目录下的 `antigens.y
 - [x] **v0.4.0** — Linux eBPF 架构骨架 + 策略引擎 + Netlink Connector + Async Deferred Blocking
 - [x] **v0.4.1** — 安全加固（见下方"安全加固"章节）
 - [x] **v0.5.0** — 真实 eBPF CO-RE exec/exit 探针加载 (libbpf-rs) + Ring Buffer 消费
-- [ ] **v0.6.0** — XDP/TC 网络阻断 + LSM 文件护栏内核实现
-- [ ] **v0.7.0** — K8s Sidecar 部署 + Prometheus metrics + 威胁情报黑名单模糊哈希库
+- [x] **v0.6.0** — XDP/TCX/TC 网络阻断 + BPF LSM 文件护栏内核实现
+- [x] **v0.7.0** — K8s DaemonSet/Sidecar 部署 + Prometheus metrics + 威胁情报黑名单模糊哈希库
 - [ ] **v1.0.0** — 生产就绪
 
 ---
@@ -298,9 +316,17 @@ Core 的规则已编译进二进制，不再依赖启动目录下的 `antigens.y
 
 `libbpf-cargo` 在构建时把探针嵌入二进制，`libbpf-rs` 在运行时执行 CO-RE 重定位并附加 exec/exit tracepoint。内核事件经 256 KiB Ring Buffer 进入有界用户态队列；加载失败时才降级到 Netlink Connector，再失败则使用 `/proc`。
 
+### Linux: 低开销内核护栏与可观测性
+
+网络快路径只做有界 LPM/哈希 map 查询，命中阻断时才发事件。Linux 6.6+ 使用 TCX link，进程异常退出也由内核自动解绑；老内核的 legacy TC 必须显式开启，并由 systemd 清理。BPF LSM、XDP、TC 各自报告 attach gauge，用户态队列和内核 Ring Buffer 均有丢事件指标。
+
+BPF LSM 路径 LPM 受内核 2048-bit 前缀上限约束，只匹配解析后不超过 255 字节的路径；超长路径与更深的递归后代会 fail-open。敏感目录仍应配合 Unix 权限、只读挂载或准入策略，且上线前必须在启用了 `bpf` LSM 的原生内核验证。
+
+威胁情报扫描只在配置数据库后启用，针对 `/proc/<pid>/exe` 的实际已执行 inode，单次读取同时计算 SHA-256 与 CTPH；文件大小、数据库条目、签名长度和缓存容量都有硬上限。
+
 ### Linux: Async Deferred Blocking
 
-对可疑进程立即 `SIGSTOP` 挂起，调用本地 LLM 在 500ms 内给出 Verdict：恶意则 `SIGKILL`，安全或超时则 `SIGCONT` 恢复。避免"先运行、后研判"的安全滞后。
+`enforce` 模式对规则已判为 High/Critical 的成功 EXEC 事件尝试 `SIGSTOP`，再调用本地 LLM 在 500ms 内给出 Verdict：恶意则 `SIGKILL`，安全或超时则 `SIGCONT`。`sched_process_exec` 是执行后事件，进程可能已运行少量指令，因此这是一层缩短暴露窗口的补充处置，不能替代 LSM/XDP/TC 的同步内核阻断。
 
 ### Fuzzy Hash 免疫记忆 (CTPH + Imphash)
 
@@ -326,7 +352,7 @@ Core 的规则已编译进二进制，不再依赖启动目录下的 `antigens.y
 
 ### Linux 端
 - **PID 复用竞态防护**：异步推迟阻断在 500ms AI 窗口后才发 `SIGKILL`，期间原进程可能已退出并被复用 PID。现以 `/proc/<pid>/stat` 的 starttime 作指纹，击杀前重新校验，避免误杀无辜进程。
-- **运行时输出诚实化**：启动日志报告实际激活的 CO-RE exec/exit 探针与 Ring Buffer；网络、LSM 和提权能力仍明确标为未实现。
+- **运行时能力诚实化**：启动日志与 `immunity_probe_attached` 分别报告 CO-RE、XDP、TC、LSM 的实际 attach 状态及降级原因。
 
 ### 工程
 - 补齐缺失的 [LICENSE](LICENSE)（MIT，徽章原先指向不存在的文件）。

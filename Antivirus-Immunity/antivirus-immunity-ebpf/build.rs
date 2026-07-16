@@ -4,6 +4,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::path::PathBuf;
 
     println!("cargo:rerun-if-changed=bpf/probes.bpf.c");
+    println!("cargo:rerun-if-changed=bpf/guard.bpf.c");
     println!("cargo:rerun-if-changed=bpf/vmlinux.h");
 
     // A Windows build of the workspace must not require a Linux eBPF
@@ -24,6 +25,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .source("bpf/probes.bpf.c")
         .clang_args([format!("-D__TARGET_ARCH_{arch}"), "-Ibpf".to_owned()])
         .build_and_generate(out)?;
+
+    let guard_out =
+        PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?).join("guard.skel.rs");
+    libbpf_cargo::SkeletonBuilder::new()
+        .source("bpf/guard.bpf.c")
+        .clang_args([format!("-D__TARGET_ARCH_{arch}"), "-Ibpf".to_owned()])
+        .build_and_generate(guard_out)?;
 
     Ok(())
 }

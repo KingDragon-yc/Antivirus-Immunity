@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux-release:
+    name: Linux release artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate tag and crate version
+        shell: bash
+        run: |
+          crate_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Antivirus-Immunity/antivirus-immunity-ebpf/Cargo.toml | head -1)
+          test "v${crate_version}" = "${GITHUB_REF_NAME}"
+      - name: Install eBPF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: clippy, rustfmt
+      - uses: taiki-e/install-action@cargo-audit
+      - name: Validate release source
+        working-directory: Antivirus-Immunity
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --package antivirus-immunity-common -- -D warnings
+          cargo clippy --locked --package antivirus-immunity-ebpf -- -A dead_code -D warnings
+          cargo test --locked --package antivirus-immunity-common
+          cargo test --locked --package antivirus-immunity-ebpf
+          cargo audit --deny warnings
+      - name: Build locked release binary
+        working-directory: Antivirus-Immunity
+        run: cargo build --locked --release --package antivirus-immunity-ebpf
+      - name: Package binary, policies, and deployment manifests
+        shell: bash
+        run: |
+          archive="antivirus-immunity-${GITHUB_REF_NAME}-linux-x86_64"
+          mkdir -p "dist/${archive}"
+          install -m 0755 Antivirus-Immunity/target/release/immunity-ebpf "dist/${archive}/"
+          cp -r Antivirus-Immunity/antivirus-immunity-ebpf/config "dist/${archive}/"
+          cp -r Antivirus-Immunity/deploy "dist/${archive}/"
+          cp Antivirus-Immunity/README.md Antivirus-Immunity/CHANGELOG.md LICENSE "dist/${archive}/"
+          tar -C dist -czf "dist/${archive}.tar.gz" "${archive}"
+          cd dist
+          sha256sum "${archive}.tar.gz" > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          if-no-files-found: error
+          path: |
+            dist/antivirus-immunity-${{ github.ref_name }}-linux-x86_64.tar.gz
+            dist/SHA256SUMS
+
+  container:
+    name: Multi-architecture container
+    needs: linux-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v4.1.2
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: Antivirus-Immunity
+          file: Antivirus-Immunity/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/kingdragon-yc/antivirus-immunity:${{ github.ref_name }}
+            ghcr.io/kingdragon-yc/antivirus-immunity:latest
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Sign published container image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "ghcr.io/kingdragon-yc/antivirus-immunity:${GITHUB_REF_NAME}@${DIGEST}"
+          cosign sign --yes "ghcr.io/kingdragon-yc/antivirus-immunity:latest@${DIGEST}"
+
+  publish:
+    name: Publish GitHub release
+    needs: [linux-release, container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body_path: Antivirus-Immunity/RELEASE_NOTES.md
+          files: |
+            dist/antivirus-immunity-${{ github.ref_name }}-linux-x86_64.tar.gz
+            dist/SHA256SUMS

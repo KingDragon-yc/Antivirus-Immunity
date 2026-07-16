@@ -9,10 +9,13 @@ use anyhow::Result;
 use chrono::Utc;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 const LOG_DIR: &str = "logs";
 const MAX_LOG_SIZE: u64 = 50 * 1024 * 1024; // 50MB
+const MAX_ROTATED_LOGS: usize = 10;
 
 #[derive(Clone)]
 pub struct Logger {
@@ -31,6 +34,13 @@ impl Logger {
         let log_dir = PathBuf::from(dir);
         fs::create_dir_all(&log_dir)?;
         let current_log = log_dir.join("immunity.jsonl");
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&log_dir, fs::Permissions::from_mode(0o700))?;
+            if current_log.exists() {
+                fs::set_permissions(&current_log, fs::Permissions::from_mode(0o600))?;
+            }
+        }
         Ok(Self {
             log_dir,
             current_log,
@@ -61,11 +71,12 @@ impl Logger {
             let _ = self.rotate();
         }
 
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        options.mode(0o600);
         if let Ok(json) = serde_json::to_string(event)
-            && let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.current_log)
+            && let Ok(mut file) = options.open(&self.current_log)
         {
             let _ = writeln!(file, "{}", json);
         }
@@ -73,9 +84,54 @@ impl Logger {
 
     /// Rotate log files when size limit exceeded
     fn rotate(&self) -> Result<()> {
-        let ts = Utc::now().format("%Y%m%d_%H%M%S");
+        let ts = Utc::now().format("%Y%m%d_%H%M%S_%3f");
         let rotated = self.log_dir.join(format!("immunity_{}.jsonl", ts));
         fs::rename(&self.current_log, rotated)?;
+        self.prune_rotated()?;
         Ok(())
+    }
+
+    fn prune_rotated(&self) -> Result<()> {
+        let mut rotated: Vec<PathBuf> = fs::read_dir(&self.log_dir)?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("immunity_") && name.ends_with(".jsonl"))
+            })
+            .collect();
+        rotated.sort_unstable();
+        let remove_count = rotated.len().saturating_sub(MAX_ROTATED_LOGS);
+        for path in rotated.into_iter().take(remove_count) {
+            let _ = fs::remove_file(path);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotated_logs_are_bounded() {
+        let directory = std::env::temp_dir().join(format!("immunity-logs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let logger = Logger::with_dir(directory.to_str().unwrap()).unwrap();
+        for index in 0..12 {
+            fs::write(
+                directory.join(format!("immunity_20260101_000000_{index:03}.jsonl")),
+                b"fixture",
+            )
+            .unwrap();
+        }
+        logger.prune_rotated().unwrap();
+        let remaining = fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .count();
+        assert_eq!(remaining, MAX_ROTATED_LOGS);
+        let _ = fs::remove_dir_all(directory);
     }
 }

@@ -151,6 +151,21 @@ impl PolicyEngine {
                 self.evaluate_cred_change(event, *old_uid, *new_uid, container_id)
             }
 
+            ProbeType::NetworkBlocked { enforced, .. }
+            | ProbeType::FileBlocked { enforced, .. } => PolicyVerdict {
+                action: if *enforced {
+                    ResponseAction::BlockAccess
+                } else {
+                    ResponseAction::Monitor
+                },
+                severity: if *enforced {
+                    Severity::Critical
+                } else {
+                    Severity::High
+                },
+                reason: event.detail.clone(),
+            },
+
             ProbeType::Exit => PolicyVerdict {
                 action: ResponseAction::Log,
                 severity: Severity::Info,
@@ -279,7 +294,7 @@ impl PolicyEngine {
     ) -> PolicyVerdict {
         // Check protected paths
         for protected in &self.protected_paths {
-            if file_path.starts_with(protected.as_str()) {
+            if path_matches(file_path, protected) {
                 // In AI Agent profile: BLOCK but don't KILL
                 let action = if self.mode == "enforce" {
                     ResponseAction::BlockAccess
@@ -349,5 +364,26 @@ impl PolicyEngine {
             severity: Severity::Info,
             reason: format!("Cred change: {} uid {} → {}", event.comm, old_uid, new_uid),
         }
+    }
+}
+
+fn path_matches(path: &str, protected: &str) -> bool {
+    !protected.is_empty()
+        && (path == protected
+            || path
+                .strip_prefix(protected)
+                .is_some_and(|suffix| suffix.starts_with('/')))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_matches;
+
+    #[test]
+    fn protected_path_matching_observes_component_boundaries() {
+        assert!(path_matches("/etc/shadow", "/etc/shadow"));
+        assert!(path_matches("/root/.ssh/authorized_keys", "/root/.ssh"));
+        assert!(!path_matches("/etc/shadow.bak", "/etc/shadow"));
+        assert!(!path_matches("/root/.ssh-old/key", "/root/.ssh"));
     }
 }

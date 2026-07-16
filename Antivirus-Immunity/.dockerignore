@@ -1,0 +1,6 @@
+target
+.git
+logs
+antivirus-immunity-core
+**/*.quarantine
+**/immunity_db.json

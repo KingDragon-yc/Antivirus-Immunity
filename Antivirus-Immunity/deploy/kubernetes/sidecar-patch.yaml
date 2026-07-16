@@ -1,0 +1,49 @@
+# Merge this fragment into a dedicated workload Pod template. A per-Pod
+# privileged sidecar costs more than the recommended one-agent-per-node
+# DaemonSet and should be reserved for strongly isolated workloads.
+spec:
+  hostPID: true
+  nodeSelector:
+    kubernetes.io/os: linux
+  containers:
+    - name: immunity-ebpf
+      image: ghcr.io/kingdragon-yc/antivirus-immunity:v0.7.0
+      args:
+        - --mode
+        - monitor
+        - --profile
+        - container
+        - --ai
+        - "false"
+        - --interface
+        - eth0
+        - --metrics-listen
+        - 0.0.0.0:9090
+        - --kernel-policy
+        - /etc/immunity/kernel-policy.json
+      securityContext:
+        privileged: true
+        allowPrivilegeEscalation: true
+        readOnlyRootFilesystem: true
+      resources:
+        requests: {cpu: 10m, memory: 32Mi}
+        limits: {cpu: 200m, memory: 128Mi}
+      volumeMounts:
+        - name: immunity-policy
+          mountPath: /etc/immunity
+          readOnly: true
+        - name: immunity-state
+          mountPath: /var/lib/immunity
+        - name: immunity-securityfs
+          mountPath: /sys/kernel/security
+          readOnly: true
+  volumes:
+    - name: immunity-policy
+      configMap:
+        name: immunity-policy
+    - name: immunity-state
+      emptyDir: {sizeLimit: 64Mi}
+    - name: immunity-securityfs
+      hostPath:
+        path: /sys/kernel/security
+        type: Directory

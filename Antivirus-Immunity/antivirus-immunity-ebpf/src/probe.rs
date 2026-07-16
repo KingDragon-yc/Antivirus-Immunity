@@ -14,10 +14,13 @@
 
 #[cfg(target_os = "linux")]
 use crate::ebpf_runtime::EbpfRuntime;
+use crate::kernel_policy::KernelPolicy;
+use crate::metrics::Metrics;
 #[cfg(target_os = "linux")]
 use crate::netlink_connector::NetlinkConnector;
 use anyhow::Result;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// 从内核探针接收的原始事件
 #[derive(Debug, Clone)]
@@ -34,15 +37,46 @@ pub struct RawProbeEvent {
     pub ns_pid: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeType {
     Execve,
     Exit,
-    TcpConnect { dst_addr: String, dst_port: u16 },
-    UdpSend { dst_addr: String, dst_port: u16 },
-    FileOpen { file_path: String },
-    InodeCreate { file_path: String },
-    CredChange { old_uid: u32, new_uid: u32 },
+    TcpConnect {
+        dst_addr: String,
+        dst_port: u16,
+    },
+    UdpSend {
+        dst_addr: String,
+        dst_port: u16,
+    },
+    FileOpen {
+        file_path: String,
+    },
+    InodeCreate {
+        file_path: String,
+    },
+    CredChange {
+        old_uid: u32,
+        new_uid: u32,
+    },
+    NetworkBlocked {
+        source: String,
+        destination: String,
+        port: u16,
+        direction: NetworkDirection,
+        enforced: bool,
+    },
+    FileBlocked {
+        file_path: String,
+        operation_mask: u32,
+        enforced: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkDirection {
+    Ingress,
+    Egress,
 }
 
 pub struct ProbeManager {
@@ -55,12 +89,19 @@ pub struct ProbeManager {
     /// If None, falls through to /proc polling.
     #[cfg(target_os = "linux")]
     netlink: Option<NetlinkConnector>,
+    metrics: Arc<Metrics>,
+    fail_closed: bool,
 }
 
 impl ProbeManager {
-    pub fn new(lite_mode: bool) -> Result<Self> {
+    pub fn new(
+        lite_mode: bool,
+        kernel_policy: KernelPolicy,
+        metrics: Arc<Metrics>,
+    ) -> Result<Self> {
+        let fail_closed = kernel_policy.fail_closed;
         #[cfg(target_os = "linux")]
-        let ebpf = match EbpfRuntime::start() {
+        let ebpf = match EbpfRuntime::start(kernel_policy, Arc::clone(&metrics)) {
             Ok(runtime) => {
                 println!(
                     "[+] ProbeManager: CO-RE eBPF probes attached; consuming kernel events via Ring Buffer"
@@ -68,7 +109,11 @@ impl ProbeManager {
                 Some(runtime)
             }
             Err(error) => {
+                if fail_closed {
+                    return Err(error.context("fail-closed eBPF initialization"));
+                }
                 eprintln!("[!] eBPF unavailable: {error:#}. Trying Netlink fallback.");
+                metrics.fallback();
                 None
             }
         };
@@ -104,7 +149,14 @@ impl ProbeManager {
             ebpf,
             #[cfg(target_os = "linux")]
             netlink,
+            metrics,
+            fail_closed,
         })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn ebpf_status(&self) -> Option<&crate::ebpf_runtime::RuntimeStatus> {
+        self.ebpf.as_ref().map(EbpfRuntime::status)
     }
 
     /// Poll for new events.
@@ -116,10 +168,15 @@ impl ProbeManager {
                 match ebpf.drain_events() {
                     Ok(events) => return Ok(events),
                     Err(error) => {
+                        self.metrics.set_attach_status(false, false, false, false);
+                        if self.fail_closed {
+                            return Err(error.context("fail-closed eBPF runtime stopped"));
+                        }
                         eprintln!(
                             "    [!] eBPF Ring Buffer failed: {error:#}. Trying Netlink fallback."
                         );
                         self.ebpf = None;
+                        self.metrics.fallback();
                         self.netlink = NetlinkConnector::new().ok();
                     }
                 }
@@ -138,6 +195,7 @@ impl ProbeManager {
                         eprintln!("    [!] Netlink error: {}. Falling back to /proc.", e);
                         // Netlink broke — disable it and fall through
                         self.netlink = None;
+                        self.metrics.fallback();
                     }
                 }
             }

@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "antivirus-immunity-core",
     "antivirus-immunity-ebpf",
     "antivirus-immunity-common",
 ]
+exclude = ["antivirus-immunity-core"]
 # edition 2024 implies resolver "3" (the current default for non-virtual
 # crates). Virtual workspaces default to "1" unless overridden, which would
 # both surprise users and trip is-it-slop's `resolver < 3` check. Pin it

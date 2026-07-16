@@ -1,29 +1,33 @@
-﻿name: CI
+name: Linux CI
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+permissions:
+  contents: read
+
 jobs:
   linux:
-    name: Linux (common + ebpf)
+    name: Linux common + eBPF
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install eBPF build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler cmake pkg-config libssl-dev \
-            clang llvm libelf-dev zlib1g-dev
+          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.91.0
         with:
           components: clippy, rustfmt
 
@@ -33,7 +37,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             Antivirus-Immunity/target
-          key: linux-cargo-${{ hashFiles('Antivirus-Immunity/**/Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('Antivirus-Immunity/Cargo.lock') }}
           restore-keys: linux-cargo-
 
       - name: Formatting
@@ -42,160 +46,56 @@ jobs:
 
       - name: Clippy common
         working-directory: Antivirus-Immunity
-        run: cargo clippy --package antivirus-immunity-common -- -D warnings
+        run: cargo clippy --locked --package antivirus-immunity-common -- -D warnings
 
-      - name: Clippy ebpf
+      - name: Clippy eBPF
         working-directory: Antivirus-Immunity
-        run: cargo clippy --package antivirus-immunity-ebpf -- -A dead_code -D warnings
+        run: cargo clippy --locked --package antivirus-immunity-ebpf -- -A dead_code -D warnings
 
-      - name: Build common
+      - name: Test common and eBPF
         working-directory: Antivirus-Immunity
-        run: cargo build --package antivirus-immunity-common
+        run: |
+          cargo test --locked --package antivirus-immunity-common
+          cargo test --locked --package antivirus-immunity-ebpf
 
-      - name: Build ebpf
+      - name: Release build
         working-directory: Antivirus-Immunity
-        run: cargo build --package antivirus-immunity-ebpf --release
+        run: cargo build --locked --release --package antivirus-immunity-ebpf
 
-      - name: Test common
+      - name: CLI smoke test
         working-directory: Antivirus-Immunity
-        run: cargo test --package antivirus-immunity-common
-
-      - name: Test ebpf
-        working-directory: Antivirus-Immunity
-        run: cargo test --package antivirus-immunity-ebpf
+        run: target/release/immunity-ebpf --help
 
       - uses: actions/upload-artifact@v4
         with:
           name: immunity-ebpf-linux-x86_64
           path: Antivirus-Immunity/target/release/immunity-ebpf
-          if-no-files-found: warn
+          if-no-files-found: error
 
-  windows:
-    name: Windows (common + core)
-    runs-on: windows-latest
+  container:
+    name: Linux container build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-
-      # OpenSSL headers + libs are needed to build `yara-x`'s transitive dep
-      # `authenticode-parser-sys`. Without this, `cargo build core` fails with
-      # `C1083: Cannot open include file: 'openssl/x509.h'`.
-      #
-      # The `openssl-sys` crate reads `OPENSSL_DIR` (and optionally
-      # `OPENSSL_LIB_DIR` / `OPENSSL_INCLUDE_DIR`) to locate the install. We
-      # set ONLY `OPENSSL_DIR` because openssl-sys auto-discovers `include` and
-      # `lib` under it — hard-coding a specific lib subdir (e.g. `lib\VC\x64\MT`)
-      # is fragile across choco package versions and previously caused the step
-      # to exit 1 when that exact subdir did not exist.
-      - name: Install OpenSSL
-        shell: powershell
-        run: |
-          choco install openssl --no-progress -y
-          # choco's openssl package installs under one of a few well-known
-          # roots depending on package version; pick whichever exists.
-          $candidates = @(
-            "C:\Program Files\OpenSSL-Win64",
-            "C:\Program Files\OpenSSL",
-            "C:\OpenSSL-Win64"
-          )
-          $root = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $root) {
-            Write-Error "OpenSSL install root not found in any of: $($candidates -join ', ')"
-            Get-ChildItem "C:\Program Files" -Filter "OpenSSL*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  found: $($_.FullName)" }
-            exit 1
-          }
-          Write-Host "Using OpenSSL at: $root"
-          Get-ChildItem "$root\lib" -Recurse -Filter "libcrypto*" -ErrorAction SilentlyContinue |
-            ForEach-Object { Write-Host "  lib: $($_.FullName)" }
-          # openssl-sys derives lib/include from OPENSSL_DIR automatically.
-          "OPENSSL_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
         with:
-          components: clippy, rustfmt
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            Antivirus-Immunity\target
-          key: windows-cargo-${{ hashFiles('Antivirus-Immunity/**/Cargo.lock') }}
-          restore-keys: windows-cargo-
-
-      - name: Formatting
-        working-directory: Antivirus-Immunity
-        run: cargo fmt --all -- --check
-
-      - name: Clippy common
-        working-directory: Antivirus-Immunity
-        run: cargo clippy --package antivirus-immunity-common -- -D warnings
-
-      - name: Clippy core
-        working-directory: Antivirus-Immunity
-        run: cargo clippy --package antivirus-immunity-core -- -A dead_code
-        continue-on-error: true
-
-      - name: Build common
-        working-directory: Antivirus-Immunity
-        run: cargo build --package antivirus-immunity-common
-
-      - name: Build core
-        working-directory: Antivirus-Immunity
-        run: cargo build --package antivirus-immunity-core --release
-
-      - name: Test common
-        working-directory: Antivirus-Immunity
-        run: cargo test --package antivirus-immunity-common
-
-      - name: Test core
-        working-directory: Antivirus-Immunity
-        run: cargo test --package antivirus-immunity-core
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: immunity-core-windows-x86_64
-          path: Antivirus-Immunity\target\release\antivirus-immunity-core.exe
-          if-no-files-found: warn
-
-  msrv:
-    name: MSRV 1.91 (Windows core)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install OpenSSL
-        shell: powershell
-        run: |
-          choco install openssl --no-progress -y
-          $candidates = @(
-            "C:\Program Files\OpenSSL-Win64",
-            "C:\Program Files\OpenSSL",
-            "C:\OpenSSL-Win64"
-          )
-          $root = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $root) {
-            Write-Error "OpenSSL install root not found"
-            exit 1
-          }
-          "OPENSSL_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - uses: dtolnay/rust-toolchain@1.91.0
-        with:
-          components: clippy
-
-      - name: Check core on declared MSRV
-        working-directory: Antivirus-Immunity
-        run: cargo check --locked --package antivirus-immunity-core
+          context: Antivirus-Immunity
+          file: Antivirus-Immunity/Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   audit:
-    name: Security Audit
+    name: Dependency audit
     runs-on: ubuntu-latest
-    continue-on-error: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install cargo-audit
-      - name: Audit
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: taiki-e/install-action@cargo-audit
+      - name: Audit locked dependencies
         working-directory: Antivirus-Immunity
-        run: cargo audit
-        continue-on-error: true
+        run: cargo audit --deny warnings
