@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7
 FROM rust:1.91-bookworm AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN rustup component add rustfmt \
+    && apt-get update && apt-get install -y --no-install-recommends \
     clang llvm libelf-dev zlib1g-dev pkg-config ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

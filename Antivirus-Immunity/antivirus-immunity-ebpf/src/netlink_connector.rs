@@ -9,8 +9,6 @@
 //!
 //! 参考: include/uapi/linux/cn_proc.h, include/uapi/linux/netlink.h
 
-#![cfg(target_os = "linux")]
-
 use crate::probe::{ProbeType, RawProbeEvent};
 use anyhow::Result;
 use std::io;
